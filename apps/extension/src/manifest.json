@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Alucify — Spec-AI Readiness Checker",
+  "version": "0.1.0",
+  "description": "Check PRD alignment with your codebase before AI agents run.",
+  "permissions": ["sidePanel", "storage", "tabs", "scripting", "activeTab"],
+  "host_permissions": ["https://www.notion.so/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.notion.so/*"],
+      "js": ["src/content/notion-detector.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "panel/index.html"
+  },
+  "action": {
+    "default_title": "Open Alucify"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

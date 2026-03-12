@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.local
+*.local
+
+# Turbo
+.turbo/
+
+# OS
+.DS_Store
+
+# Build artifacts
+apps/*/dist/
+packages/*/dist/
+node_modules

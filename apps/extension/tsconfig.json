@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "types": ["chrome", "vite/client"]
+  },
+  "include": ["src/**/*", "panel/**/*", "vite.config.ts"]
+}
