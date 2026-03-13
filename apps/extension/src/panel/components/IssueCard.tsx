@@ -50,12 +50,20 @@ export function IssueCard({ issue, onExpand }: Props) {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Description</p>
             <p className="text-sm text-gray-700">{issue.description}</p>
           </div>
+          {issue.evidence && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Evidence</p>
+              <p className="text-sm text-gray-700">{issue.evidence}</p>
+            </div>
+          )}
+          {issue.risk && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Risk</p>
+              <p className="text-sm text-gray-700">{issue.risk}</p>
+            </div>
+          )}
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Impact</p>
-            <p className="text-sm text-gray-700">{issue.impact}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Recommendation</p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Resolution</p>
             <p className="text-sm text-gray-700">{issue.recommendation}</p>
           </div>
         </div>

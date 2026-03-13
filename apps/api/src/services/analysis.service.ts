@@ -1,100 +1,103 @@
 import { v4 as uuidv4 } from "uuid";
-import type { JobState, AnalysisResult, Issue } from "@alucify/shared-types";
-
-// In-memory job store (Phase 0 — no Redis yet)
-const jobs = new Map<string, JobState>();
+import { anthropic, MODEL } from "../lib/anthropic.js";
+import { createJob, updateJob } from "./job-store.js";
+import { buildRepoIndex } from "./repo-indexer.js";
+import {
+  PRD_EXTRACTION_SYSTEM,
+  buildPrdExtractionPrompt,
+  type PrdEntities,
+} from "../prompts/prd-extraction.prompt.js";
+import { runPrdAudit, auditReportToIssues } from "./prd-auditor.service.js";
+import type { AnalysisRequest, AnalysisResult, Issue } from "@alucify/shared-types";
 
 const STAGE_LABELS = [
   "Extracting PRD intent...",
   "Scanning repository...",
-  "Mapping dependencies...",
-  "Detecting incongruences...",
+  "Auditing PRD against codebase...",
+  "Compiling results...",
 ];
 
-const MOCK_ISSUES: Issue[] = [
-  {
-    id: "issue-1",
-    summary: "Payment gateway API endpoint undefined in codebase",
-    description:
-      "The PRD references a POST /payments/initiate endpoint that does not exist in the current codebase. The payment flow described in Section 3.2 cannot be implemented without this endpoint.",
-    impact: "critical",
-    recommendation:
-      "Define and implement the POST /payments/initiate handler before handing off to the AI coding agent. Specify request/response schema and error states.",
-    affectedArea: "payments",
-  },
-  {
-    id: "issue-2",
-    summary: "User role 'editor' not defined in auth model",
-    description:
-      "The PRD mentions an 'editor' role with granular content permissions, but the current auth model only recognizes 'admin' and 'viewer'. Role-based access control logic will produce undefined behaviour.",
-    impact: "high",
-    recommendation:
-      "Extend the roles enum and permission matrix to include 'editor'. Update the auth middleware to handle the new role before spec implementation.",
-    affectedArea: "auth",
-  },
-  {
-    id: "issue-3",
-    summary: "Notification service referenced but not scaffolded",
-    description:
-      "Section 5 of the PRD describes email and push notifications on user events. There is no notification service, queue, or email provider integration present in the repository.",
-    impact: "medium",
-    recommendation:
-      "Either scaffold a basic notification service stub with the expected interface, or scope notifications out of the current sprint before running the AI agent.",
-    affectedArea: "notifications",
-  },
-];
-
-export function createJob(notionPageId: string): string {
+export async function startAnalysis(request: AnalysisRequest): Promise<string> {
   const jobId = uuidv4();
-  const job: JobState = {
+  await createJob(jobId, {
     jobId,
     status: "pending",
     stage: 1,
     stageLabel: STAGE_LABELS[0],
-  };
-  jobs.set(jobId, job);
-  simulateProgress(jobId, notionPageId);
+  });
+
+  // Run pipeline async — don't await
+  runPipeline(jobId, request).catch(async (err) => {
+    console.error(`[Analysis ${jobId}] Pipeline error:`, err);
+    await updateJob(jobId, {
+      status: "failed",
+      error: "analysis_error",
+      message: "Analysis could not be completed. Please try again.",
+    });
+  });
+
   return jobId;
 }
 
-export function getJob(jobId: string): JobState | null {
-  return jobs.get(jobId) ?? null;
-}
+async function runPipeline(jobId: string, request: AnalysisRequest) {
+  const { prdText, repo, notionPageId } = request;
 
-function simulateProgress(jobId: string, notionPageId: string) {
-  let stage = 1;
+  console.log(`[Analysis ${jobId}] prdText length=${prdText.length} preview="${prdText.slice(0, 120).replace(/\n/g, " ")}"`);
 
-  const advance = () => {
-    const job = jobs.get(jobId);
-    if (!job) return;
+  // ── Stage 1: Extract PRD entities ─────────────────────────────────────────
+  await updateJob(jobId, { status: "running", stage: 1, stageLabel: STAGE_LABELS[0] });
 
-    stage++;
-    if (stage <= 4) {
-      jobs.set(jobId, {
-        ...job,
-        status: "running",
-        stage,
-        stageLabel: STAGE_LABELS[stage - 1],
-      });
-      setTimeout(advance, 2000);
-    } else {
-      const result: AnalysisResult = {
-        jobId,
-        notionPageId,
-        issueCount: MOCK_ISSUES.length,
-        badge: "needs-work",
-        issues: MOCK_ISSUES,
-        analyzedAt: new Date().toISOString(),
-      };
-      jobs.set(jobId, {
-        ...job,
-        status: "completed",
-        result,
-      });
-    }
+  let prdEntities: PrdEntities = {
+    entities: [], apiEndpoints: [], userFlows: [], techRequirements: [], integrations: [],
   };
 
-  // Start first transition after 2s
-  jobs.set(jobId, { ...jobs.get(jobId)!, status: "running" });
-  setTimeout(advance, 2000);
+  if (prdText.trim().length > 50) {
+    try {
+      const extraction = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 2048,
+        system: PRD_EXTRACTION_SYSTEM,
+        messages: [{ role: "user", content: buildPrdExtractionPrompt(prdText) }],
+      });
+      const raw = extraction.content[0].type === "text" ? extraction.content[0].text : "{}";
+      const cleaned = raw.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+      prdEntities = JSON.parse(cleaned) as PrdEntities;
+    } catch (err) {
+      console.warn(`[Analysis ${jobId}] PRD extraction failed, continuing:`, err);
+    }
+  }
+
+  // ── Stage 2: Build repo index (heuristic, no LLM) ─────────────────────────
+  await updateJob(jobId, { stage: 2, stageLabel: STAGE_LABELS[1] });
+
+  const repoIndex = buildRepoIndex(repo);
+
+  // ── Stage 3: PRD Auditor agent (prd-auditor.md) ───────────────────────────
+  await updateJob(jobId, { stage: 3, stageLabel: STAGE_LABELS[2] });
+
+  const auditReport = await runPrdAudit(prdText, prdEntities, repoIndex);
+
+  // ── Stage 4: Map audit report → structured issues ─────────────────────────
+  await updateJob(jobId, { stage: 4, stageLabel: STAGE_LABELS[3] });
+
+  const issues = auditReportToIssues(auditReport);
+  const badge = deriveBadge(issues);
+
+  const result: AnalysisResult = {
+    jobId,
+    notionPageId,
+    issueCount: issues.length,
+    badge,
+    issues,
+    analyzedAt: new Date().toISOString(),
+  };
+
+  await updateJob(jobId, { status: "completed", result });
+}
+
+function deriveBadge(issues: Issue[]): AnalysisResult["badge"] {
+  if (issues.some((i) => i.impact === "critical")) return "not-ready";
+  if (issues.some((i) => i.impact === "high")) return "needs-work";
+  if (issues.length > 0) return "mostly-ready";
+  return "ready";
 }

@@ -22,6 +22,7 @@ const INITIAL: AnalysisState = {
 };
 
 const POLL_INTERVAL_MS = 1000;
+const MAX_POLLS = 300; // 5-minute timeout
 
 export function useAnalysis() {
   const [state, setState] = useState<AnalysisState>(INITIAL);
@@ -47,15 +48,27 @@ export function useAnalysis() {
       if ("error" in response) throw new Error(response.error);
 
       const { jobId } = response;
+      if (!jobId) throw new Error("Analysis failed to start — no job ID returned.");
       setState((s) => ({ ...s, jobId }));
 
+      let pollCount = 0;
       pollRef.current = setInterval(async () => {
+        if (++pollCount > MAX_POLLS) {
+          stopPolling();
+          setState((s) => ({ ...s, phase: "error", error: "Analysis timed out after 5 minutes." }));
+          return;
+        }
         try {
           const job = await chrome.runtime.sendMessage({
             type: "GET_JOB_STATUS",
             jobId,
           }) as JobState;
 
+          if (!job.status) {
+            stopPolling();
+            setState((s) => ({ ...s, phase: "error", error: "Job not found. It may have expired." }));
+            return;
+          }
           if (job.status === "running") {
             setState((s) => ({
               ...s,

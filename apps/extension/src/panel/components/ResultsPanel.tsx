@@ -1,6 +1,13 @@
 import React, { useEffect } from "react";
-import type { AnalysisResult } from "@alucify/shared-types";
+import type { AnalysisResult, IssueImpact } from "@alucify/shared-types";
 import { IssueCard } from "./IssueCard";
+
+const IMPACT_ORDER: Record<IssueImpact, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
 
 const BADGE_CONFIG = {
   "not-ready": { label: "Not Ready", color: "bg-red-100 text-red-700 border-red-300" },
@@ -41,9 +48,11 @@ export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }
 
       {/* Issue list */}
       <div className="flex flex-col gap-2">
-        {result.issues.map((issue) => (
-          <IssueCard key={issue.id} issue={issue} onExpand={onIssueExpand} />
-        ))}
+        {[...result.issues]
+          .sort((a, b) => IMPACT_ORDER[a.impact] - IMPACT_ORDER[b.impact])
+          .map((issue) => (
+            <IssueCard key={issue.id} issue={issue} onExpand={onIssueExpand} />
+          ))}
       </div>
 
       <button

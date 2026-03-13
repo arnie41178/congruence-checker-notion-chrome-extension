@@ -43,20 +43,31 @@ async function handleMessage(message: Record<string, unknown>) {
 
   switch (message.type) {
     case "NOTION_PAGE_DETECTED": {
-      const { pageId, wordCount } = message as { type: string; pageId: string; wordCount: number };
+      const { pageId, wordCount, prdText } = message as { type: string; pageId: string; wordCount: number; prdText?: string };
       track("extension_notion_page_detected", { notionPageId: pageId, wordCount });
       if (wordCount > 200) {
         track("prd_page_detected", { notionPageId: pageId, wordCount });
       }
-      await chrome.storage.local.set({ currentNotionPageId: pageId });
+      await chrome.storage.local.set({ currentNotionPageId: pageId, currentPrdText: prdText ?? "" });
       return { ok: true };
     }
 
     case "START_ANALYSIS": {
       const { notionPageId, repo } = message as { type: string; notionPageId: string; repo?: RepoContext };
       track("run_congruence_check_clicked", { notionPageId });
-      const jobId = await startAnalysis(clientId, notionPageId, repo);
-      track("analysis_started", { notionPageId, jobId });
+
+      // Use cached PRD text; if empty, request a fresh extraction from the active tab
+      const stored = await chrome.storage.local.get("currentPrdText");
+      let prdText = (stored.currentPrdText as string) ?? "";
+      console.log(`[Alucify SW] START_ANALYSIS notionPageId=${notionPageId} cachedPrdLength=${prdText.length}`);
+
+      if (prdText.trim().length < 50) {
+        prdText = await extractPrdTextFromActiveTab();
+        console.log(`[Alucify SW] Fresh extraction: prdLength=${prdText.length}`);
+      }
+
+      const jobId = await startAnalysis(clientId, notionPageId, prdText, repo);
+      track("analysis_started", { notionPageId, jobId, prdLength: prdText.length });
       return { jobId };
     }
 
@@ -108,11 +119,12 @@ async function isFirstOpen(): Promise<boolean> {
 async function startAnalysis(
   clientId: string,
   notionPageId: string,
+  prdText: string,
   repo?: RepoContext
 ): Promise<string> {
   const body = {
     notionPageId,
-    prdText: "",
+    prdText,
     repo: repo ?? { name: "mock", files: [], meta: { totalFiles: 0, totalChars: 0 } },
   };
   const res = await fetch(`${API_BASE}/analysis/run`, {
@@ -120,8 +132,29 @@ async function startAnalysis(
     headers: { "Content-Type": "application/json", "X-Client-ID": clientId },
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`API error ${res.status}: ${err}`);
+  }
   const data = (await res.json()) as { jobId: string };
   return data.jobId;
+}
+
+async function extractPrdTextFromActiveTab(): Promise<string> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return "";
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_PRD_TEXT" }) as { prdText: string } | undefined;
+    const text = response?.prdText ?? "";
+    console.log(`[Alucify SW] Fresh PRD extraction: ${text.length} chars`);
+    if (text.length > 0) {
+      await chrome.storage.local.set({ currentPrdText: text });
+    }
+    return text;
+  } catch (err) {
+    console.warn("[Alucify SW] Fresh PRD extraction failed:", err);
+    return "";
+  }
 }
 
 async function pollJob(clientId: string, jobId: string) {

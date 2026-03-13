@@ -8,6 +8,8 @@ export interface Issue {
   impact: IssueImpact;
   recommendation: string;
   affectedArea?: string;
+  evidence?: string;
+  risk?: string;
 }
 
 export interface AnalysisResult {

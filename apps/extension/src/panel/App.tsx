@@ -10,7 +10,7 @@ import { ResultsPanel } from "./components/ResultsPanel";
 type AppStep = "idle" | "repo_selection" | "running" | "results" | "error";
 
 export default function App() {
-  const pageId = useNotionPage();
+  const { pageId, source } = useNotionPage();
   const { state: analysis, startAnalysis, reset: resetAnalysis } = useAnalysis();
   const { state: repo, pickAndRead, useStoredRepo, clearSelection } = useRepoMemory(pageId);
   const [step, setStep] = useState<AppStep>("idle");
@@ -91,11 +91,11 @@ export default function App() {
           </svg>
         </div>
         <span className="text-sm font-semibold text-gray-700">Alucify</span>
-        {pageId && (
-          <span className="ml-auto text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
-            Notion page detected
-          </span>
-        )}
+        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full border ${source ? "text-green-600 bg-green-50 border-green-200" : "text-gray-400 bg-gray-50 border-gray-200"}`}>
+          {source === "notion" && "Notion Page Detected"}
+          {source === "google-docs" && "Google Docs Detected"}
+          {!source && "Page Not Detected"}
+        </span>
       </div>
 
       {/* Body */}
