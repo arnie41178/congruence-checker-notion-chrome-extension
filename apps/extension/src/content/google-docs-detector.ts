@@ -11,24 +11,23 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function isDocumentPage(): boolean {
-  return (
-    !!document.querySelector(".kix-appview-editor") ||
-    !!document.querySelector(".kix-paragraphrenderer") ||
-    !!document.querySelector(".docs-editor-container")
-  );
-}
-
-function detect() {
-  const isDoc = isDocumentPage();
+async function detect() {
   const pageId = getGoogleDocsPageId();
 
-  console.log("[Alucify] Google Docs detect()", { isDoc, pageId, url: location.href });
+  console.log("[Alucify] Google Docs detect()", { pageId, url: location.href });
 
-  if (!isDoc || !pageId) return;
+  if (!pageId) return;
 
-  const prdText = extractGoogleDocsText();
+  let prdText = "";
+  try {
+    prdText = await extractGoogleDocsText(pageId);
+  } catch (err) {
+    console.warn("[Alucify] Google Docs extraction failed:", err);
+    return;
+  }
+
   const wordCount = countWords(prdText);
+  console.log("[Alucify] Google Docs extracted", wordCount, "words,", prdText.length, "chars");
 
   chrome.runtime.sendMessage(
     { type: "NOTION_PAGE_DETECTED", pageId, wordCount, prdText },
@@ -48,11 +47,21 @@ function detect() {
 // Handle on-demand extraction requests from the service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "GET_PRD_TEXT") {
-    const prdText = extractGoogleDocsText();
-    const wordCount = countWords(prdText);
-    sendResponse({ prdText, wordCount });
+    const pageId = getGoogleDocsPageId();
+    if (!pageId) {
+      sendResponse({ prdText: "", wordCount: 0 });
+      return true;
+    }
+    extractGoogleDocsText(pageId)
+      .then((prdText) => {
+        sendResponse({ prdText, wordCount: countWords(prdText) });
+      })
+      .catch((err) => {
+        console.warn("[Alucify] GET_PRD_TEXT extraction failed:", err);
+        sendResponse({ prdText: "", wordCount: 0 });
+      });
   }
-  return true;
+  return true; // keep channel open for async response
 });
 
 // Google Docs is an SPA — run on load and re-run on navigation
@@ -62,7 +71,7 @@ let lastUrl = location.href;
 const observer = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    setTimeout(detect, 2000); // Google Docs takes longer to render than Notion
+    setTimeout(detect, 2000);
   }
 });
 

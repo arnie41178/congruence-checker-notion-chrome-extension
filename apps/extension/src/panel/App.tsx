@@ -31,6 +31,7 @@ export default function App() {
   // When repo is selected and we were in repo_selection, kick off analysis
   useEffect(() => {
     if (step === "repo_selection" && repo.selected && repo.lastResult) {
+      console.log("[Alucify] repo files being sent:", repo.lastResult.files.map(f => f.path));
       const repoPayload = {
         name: repo.selected.name,
         files: repo.lastResult.files,

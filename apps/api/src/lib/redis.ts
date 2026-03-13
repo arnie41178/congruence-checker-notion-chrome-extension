@@ -6,4 +6,4 @@ export const redis = new Redis({
 });
 
 export const JOB_TTL_SECONDS = 60 * 60; // 1 hour
-export const DAILY_LIMIT = 10; // max analyses per clientId per day
+export const DAILY_LIMIT = 100; // max analyses per clientId per day

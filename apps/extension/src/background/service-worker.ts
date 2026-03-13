@@ -59,7 +59,7 @@ async function handleMessage(message: Record<string, unknown>) {
       // Use cached PRD text; if empty, request a fresh extraction from the active tab
       const stored = await chrome.storage.local.get("currentPrdText");
       let prdText = (stored.currentPrdText as string) ?? "";
-      console.log(`[Alucify SW] START_ANALYSIS notionPageId=${notionPageId} cachedPrdLength=${prdText.length}`);
+      console.log(`[Alucify SW] START_ANALYSIS notionPageId=${notionPageId} cachedPrdLength=${prdText.length} repoFiles=${repo?.files?.map(f => f.path)}`);
 
       if (prdText.trim().length < 50) {
         prdText = await extractPrdTextFromActiveTab();
