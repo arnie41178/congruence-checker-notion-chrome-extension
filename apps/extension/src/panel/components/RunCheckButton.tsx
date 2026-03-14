@@ -26,7 +26,7 @@ export function RunCheckButton({ onClick, disabled }: Props) {
       </button>
       {disabled && (
         <p className="text-xs text-gray-400 text-center">
-          Open a Notion page to run a check
+          Open a Notion or Google Docs page to run a check
         </p>
       )}
     </div>

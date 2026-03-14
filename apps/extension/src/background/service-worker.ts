@@ -1,6 +1,18 @@
 import { getOrCreateClientId } from "../lib/client-id";
 import { initTelemetry, track } from "../lib/telemetry";
+import { runLocalPipeline } from "../lib/local-pipeline";
 import type { RepoContext } from "@alucify/shared-types";
+
+// ── Local job store (in-memory, lives as long as SW is alive) ─────────────────
+interface LocalJobState {
+  jobId: string;
+  status: "running" | "completed" | "failed";
+  stage?: number;
+  stageLabel?: string;
+  result?: unknown;
+  message?: string;
+}
+const localJobs = new Map<string, LocalJobState>();
 
 const API_BASE = (self as unknown as { VITE_API_BASE?: string }).VITE_API_BASE
   ?? "http://localhost:3001";
@@ -56,23 +68,51 @@ async function handleMessage(message: Record<string, unknown>) {
       const { notionPageId, repo } = message as { type: string; notionPageId: string; repo?: RepoContext };
       track("run_congruence_check_clicked", { notionPageId });
 
-      // Use cached PRD text; if empty, request a fresh extraction from the active tab
-      const stored = await chrome.storage.local.get("currentPrdText");
-      let prdText = (stored.currentPrdText as string) ?? "";
-      console.log(`[Alucify SW] START_ANALYSIS notionPageId=${notionPageId} cachedPrdLength=${prdText.length} repoFiles=${repo?.files?.map(f => f.path)}`);
+      const stored = await chrome.storage.local.get(["currentPrdText", "alucify_mode", "alucify_api_key"]);
+      const mode = (stored.alucify_mode as string) ?? "remote";
+      const cachedPrdText = (stored.currentPrdText as string) ?? "";
 
+      // Always try a fresh extraction from the active tab first (most reliable)
+      // Fall back to cached storage if fresh extraction returns too little
+      let prdText = await extractPrdTextFromActiveTab();
       if (prdText.trim().length < 50) {
-        prdText = await extractPrdTextFromActiveTab();
-        console.log(`[Alucify SW] Fresh extraction: prdLength=${prdText.length}`);
+        prdText = cachedPrdText;
+      }
+      console.log(`[Alucify SW] START_ANALYSIS mode=${mode} notionPageId=${notionPageId} freshPrdLength=${prdText.length} cachedPrdLength=${cachedPrdText.length} repoFiles=${repo?.files?.map(f => f.path)}`);
+
+      if (mode === "local") {
+        const apiKey = (stored.alucify_api_key as string) ?? "";
+        if (!apiKey) throw new Error("No API key configured. Open Settings to add your Anthropic API key.");
+        const jobId = crypto.randomUUID();
+        localJobs.set(jobId, { jobId, status: "running", stage: 1, stageLabel: "Extracting PRD intent..." });
+        runLocalPipeline(jobId, notionPageId, prdText, repo ?? { name: "unknown", files: [], meta: { totalFiles: 0, totalChars: 0 } }, apiKey, (progress) => {
+          localJobs.set(jobId, { ...localJobs.get(jobId)!, ...progress });
+        }).then((result) => {
+          localJobs.set(jobId, { jobId, status: "completed", result });
+        }).catch((err) => {
+          localJobs.set(jobId, { jobId, status: "failed", message: String(err) });
+        });
+        track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode: "local" });
+        return { jobId };
       }
 
       const jobId = await startAnalysis(clientId, notionPageId, prdText, repo);
-      track("analysis_started", { notionPageId, jobId, prdLength: prdText.length });
+      track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode: "remote" });
       return { jobId };
     }
 
     case "GET_JOB_STATUS": {
       const { jobId } = message as { type: string; jobId: string };
+
+      // Check local jobs first
+      const localJob = localJobs.get(jobId);
+      if (localJob) {
+        if (localJob.status === "completed") {
+          track("analysis_completed", { jobId, issueCount: (localJob.result as { issueCount?: number })?.issueCount, badge: (localJob.result as { badge?: string })?.badge });
+        }
+        return localJob;
+      }
+
       const status = await pollJob(clientId, jobId);
       if (status.status === "completed") {
         track("analysis_completed", {
@@ -141,18 +181,57 @@ async function startAnalysis(
 }
 
 async function extractPrdTextFromActiveTab(): Promise<string> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return "";
+
+  // First try: send message to content script (if already injected)
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return "";
     const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_PRD_TEXT" }) as { prdText: string } | undefined;
     const text = response?.prdText ?? "";
-    console.log(`[Alucify SW] Fresh PRD extraction: ${text.length} chars`);
     if (text.length > 0) {
       await chrome.storage.local.set({ currentPrdText: text });
+      console.log(`[Alucify SW] PRD via content script: ${text.length} chars`);
+      return text;
+    }
+  } catch {
+    console.warn("[Alucify SW] Content script not reachable, falling back to executeScript");
+  }
+
+  // Fallback: inject script directly into the tab (handles tabs open before extension load)
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const MAX_CHARS = 32_000;
+        const blockEls = document.querySelectorAll<HTMLElement>("[data-block-id]");
+        const lines: string[] = [];
+        if (blockEls.length > 0) {
+          for (const el of blockEls) {
+            if (el.closest(".notion-sidebar, .notion-topbar, .notion-comments, nav")) continue;
+            const text = (el.innerText ?? el.textContent ?? "").trim();
+            if (text) lines.push(text);
+          }
+        } else {
+          const container =
+            document.querySelector(".notion-page-content") ??
+            document.querySelector(".notion-scroller") ??
+            document.querySelector("[role='main']") ??
+            document.body;
+          const text = ((container as HTMLElement).innerText ?? container.textContent ?? "").trim();
+          if (text) lines.push(text);
+        }
+        let result = lines.join("\n").slice(0, MAX_CHARS);
+        return result;
+      },
+    });
+    const text = (results?.[0]?.result as string) ?? "";
+    if (text.length > 0) {
+      await chrome.storage.local.set({ currentPrdText: text });
+      console.log(`[Alucify SW] PRD via executeScript: ${text.length} chars`);
     }
     return text;
   } catch (err) {
-    console.warn("[Alucify SW] Fresh PRD extraction failed:", err);
+    console.warn("[Alucify SW] executeScript extraction failed:", err);
     return "";
   }
 }

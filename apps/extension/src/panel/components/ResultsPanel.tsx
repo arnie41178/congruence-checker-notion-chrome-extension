@@ -1,6 +1,8 @@
 import React, { useEffect } from "react";
 import type { AnalysisResult, IssueImpact } from "@alucify/shared-types";
 import { IssueCard } from "./IssueCard";
+import { downloadJson, downloadMarkdown } from "../../lib/download";
+import { formatMarkdownReport } from "../../lib/report-formatter";
 
 const IMPACT_ORDER: Record<IssueImpact, number> = {
   critical: 0,
@@ -30,6 +32,15 @@ export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }
   }, []);
 
   const badge = BADGE_CONFIG[result.badge];
+  const fileSlug = `congruence-report-${result.jobId}`;
+
+  const handleDownloadMarkdown = () => {
+    downloadMarkdown(`${fileSlug}.md`, formatMarkdownReport(result));
+  };
+
+  const handleDownloadJson = () => {
+    downloadJson(`${fileSlug}.json`, result);
+  };
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -44,6 +55,22 @@ export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }
         <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${badge.color}`}>
           {badge.label}
         </span>
+      </div>
+
+      {/* Download buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={handleDownloadMarkdown}
+          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50 hover:border-gray-300"
+        >
+          Download Report (.md)
+        </button>
+        <button
+          onClick={handleDownloadJson}
+          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50 hover:border-gray-300"
+        >
+          Download JSON
+        </button>
       </div>
 
       {/* Issue list */}

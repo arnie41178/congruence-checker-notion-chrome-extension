@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Check PRD alignment with your codebase before AI agents run.",
   "permissions": ["sidePanel", "storage", "tabs", "scripting", "activeTab"],
-  "host_permissions": ["https://www.notion.so/*", "https://docs.google.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "host_permissions": ["https://www.notion.so/*", "https://docs.google.com/*", "http://localhost/*", "http://127.0.0.1/*", "https://api.anthropic.com/*"],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
