@@ -14,7 +14,7 @@ import type { AnalysisMode } from "./hooks/useSettings";
 type AppStep = "onboarding" | "idle" | "repo_selection" | "running" | "results" | "error";
 
 export default function App() {
-  const { pageId, source } = useNotionPage();
+  const { pageId, source, refresh: refreshPage } = useNotionPage();
   const { state: analysis, startAnalysis, reset: resetAnalysis } = useAnalysis();
   const { state: repo, pickAndRead, useStoredRepo, clearSelection } = useRepoMemory(pageId);
   const { state: settings, save: saveSettings } = useSettings();
@@ -115,20 +115,20 @@ export default function App() {
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
         {/* Logo — never shrinks */}
-        <div className="w-6 h-6 shrink-0 bg-brand-500 rounded flex items-center justify-center">
-          <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4" />
-          </svg>
-        </div>
+        <img src="/logo.png" alt="Alucify" className="w-6 h-6 shrink-0 object-contain" />
         <span className="text-sm font-semibold text-gray-700 shrink-0">Alucify</span>
 
         {/* Badges — take remaining space, allow page badge to truncate */}
         <div className="flex-1 flex items-center gap-1.5 min-w-0 overflow-hidden">
-          <span className={`text-xs px-2 py-0.5 rounded-full border truncate ${source ? "text-green-600 bg-green-50 border-green-200" : "text-gray-400 bg-gray-50 border-gray-200"}`}>
+          <button
+            onClick={refreshPage}
+            className={`text-xs px-2 py-0.5 rounded-full border truncate text-left ${source ? "text-green-600 bg-green-50 border-green-200 hover:bg-green-100" : "text-gray-400 bg-gray-50 border-gray-200 hover:bg-gray-100"}`}
+            title="Re-detect page"
+          >
             {source === "notion" && "Notion Page Detected"}
             {source === "google-docs" && "Google Docs Detected"}
             {!source && "Page Not Detected"}
-          </span>
+          </button>
 
           {/* Mode badge — always fully visible */}
           {settings.mode === "local" && (
