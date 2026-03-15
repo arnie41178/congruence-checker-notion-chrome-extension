@@ -22,7 +22,7 @@ const INITIAL: AnalysisState = {
 };
 
 const POLL_INTERVAL_MS = 1000;
-const MAX_POLLS = 300; // 5-minute timeout
+const MAX_POLLS = 600; // 10-minute timeout
 
 export function useAnalysis() {
   const [state, setState] = useState<AnalysisState>(INITIAL);
@@ -55,7 +55,7 @@ export function useAnalysis() {
       pollRef.current = setInterval(async () => {
         if (++pollCount > MAX_POLLS) {
           stopPolling();
-          setState((s) => ({ ...s, phase: "error", error: "Analysis timed out after 5 minutes." }));
+          setState((s) => ({ ...s, phase: "error", error: "Analysis timed out after 10 minutes." }));
           return;
         }
         try {

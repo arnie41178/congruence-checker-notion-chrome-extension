@@ -7,7 +7,7 @@ import {
   buildPrdExtractionPrompt,
   type PrdEntities,
 } from "../prompts/prd-extraction.prompt.js";
-import { runPrdAudit, auditReportToIssues } from "./prd-auditor.service.js";
+import { runPrdAudit, auditReportToIssues, scorecardFromReport } from "./prd-auditor.service.js";
 import type { AnalysisRequest, AnalysisResult, Issue } from "@alucify/shared-types";
 
 const STAGE_LABELS = [
@@ -82,6 +82,7 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
 
   const issues = auditReportToIssues(auditReport);
   const badge = deriveBadge(issues);
+  const scorecard = scorecardFromReport(auditReport);
 
   const result: AnalysisResult = {
     jobId,
@@ -90,6 +91,7 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
     badge,
     issues,
     analyzedAt: new Date().toISOString(),
+    ...(scorecard ? { scorecard } : {}),
   };
 
   await updateJob(jobId, { status: "completed", result });

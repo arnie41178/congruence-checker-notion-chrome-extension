@@ -26,7 +26,8 @@ export function formatMarkdownReport(result: AnalysisResult): string {
   }
 
   result.issues.forEach((issue, i) => {
-    lines.push(`## Issue ${i + 1} — ${issue.summary} [${issue.impact.toUpperCase()}]`);
+    const status = issue.accepted === false ? "❌ Rejected" : "✅ Accepted";
+    lines.push(`## Issue ${i + 1} — ${issue.summary} [${issue.impact.toUpperCase()}] ${status}`);
     lines.push("");
     if (issue.affectedArea) {
       lines.push(`**Affected Area:** ${issue.affectedArea}`);
@@ -38,12 +39,29 @@ export function formatMarkdownReport(result: AnalysisResult): string {
       lines.push(`**Evidence:** ${issue.evidence}`);
       lines.push("");
     }
-    if (issue.risk) {
-      lines.push(`**Risk:** ${issue.risk}`);
+    if (issue.suggestion) {
+      lines.push(`**Suggestion:** ${issue.suggestion}`);
       lines.push("");
     }
-    lines.push(`**Resolution:** ${issue.recommendation}`);
-    lines.push("");
+    if (issue.diffs && issue.diffs.length > 0) {
+      lines.push("**Diffs:**");
+      lines.push("");
+      issue.diffs.forEach((hunk) => {
+        lines.push(`*${hunk.sectionTitle}*`);
+        lines.push("");
+        if (hunk.before) {
+          lines.push("```diff");
+          lines.push(`- ${hunk.before}`);
+          lines.push(`+ ${hunk.after}`);
+          lines.push("```");
+        } else {
+          lines.push("```diff");
+          lines.push(`+ ${hunk.after}`);
+          lines.push("```");
+        }
+        lines.push("");
+      });
+    }
     lines.push("---");
     lines.push("");
   });

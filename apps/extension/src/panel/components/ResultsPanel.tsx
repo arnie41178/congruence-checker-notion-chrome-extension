@@ -1,6 +1,7 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import type { AnalysisResult, IssueImpact } from "@alucify/shared-types";
-import { IssueCard } from "./IssueCard";
+import { SuggestionCard } from "./SuggestionCard";
+import { ScorecardPanel } from "./ScorecardPanel";
 import { downloadJson, downloadMarkdown } from "../../lib/download";
 import { formatMarkdownReport } from "../../lib/report-formatter";
 
@@ -18,6 +19,8 @@ const BADGE_CONFIG = {
   ready: { label: "Ready", color: "bg-green-100 text-green-700 border-green-300" },
 };
 
+type Tab = "scorecard" | "suggestions";
+
 interface Props {
   result: AnalysisResult;
   onReset: () => void;
@@ -25,7 +28,15 @@ interface Props {
   onResultsViewed: () => void;
 }
 
-export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }: Props) {
+export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, onResultsViewed }: Props) {
+  const hasScorecard = !!result.scorecard;
+  const [tab, setTab] = useState<Tab>(hasScorecard ? "scorecard" : "suggestions");
+
+  // All issues accepted by default
+  const [acceptedIds, setAcceptedIds] = useState<Set<string>>(
+    () => new Set(result.issues.map((i) => i.id))
+  );
+
   useEffect(() => {
     onResultsViewed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -34,13 +45,20 @@ export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }
   const badge = BADGE_CONFIG[result.badge];
   const fileSlug = `congruence-report-${result.jobId}`;
 
+  // Attach accepted state to issues before passing to downloads
+  const issuesWithAccepted = result.issues.map((i) => ({ ...i, accepted: acceptedIds.has(i.id) }));
+
   const handleDownloadMarkdown = () => {
-    downloadMarkdown(`${fileSlug}.md`, formatMarkdownReport(result));
+    downloadMarkdown(`${fileSlug}.md`, formatMarkdownReport({ ...result, issues: issuesWithAccepted }));
   };
 
   const handleDownloadJson = () => {
-    downloadJson(`${fileSlug}.json`, result);
+    downloadJson(`${fileSlug}.json`, { ...result, issues: issuesWithAccepted });
   };
+
+  const sortedIssues = [...result.issues].sort(
+    (a, b) => IMPACT_ORDER[a.impact] - IMPACT_ORDER[b.impact]
+  );
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -73,14 +91,51 @@ export function ResultsPanel({ result, onReset, onIssueExpand, onResultsViewed }
         </button>
       </div>
 
-      {/* Issue list */}
-      <div className="flex flex-col gap-2">
-        {[...result.issues]
-          .sort((a, b) => IMPACT_ORDER[a.impact] - IMPACT_ORDER[b.impact])
-          .map((issue) => (
-            <IssueCard key={issue.id} issue={issue} onExpand={onIssueExpand} />
-          ))}
+      {/* Tab switcher */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+        {hasScorecard && (
+          <button
+            onClick={() => setTab("scorecard")}
+            className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${
+              tab === "scorecard"
+                ? "bg-white text-gray-800 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Scorecard
+          </button>
+        )}
+        <button
+          onClick={() => setTab("suggestions")}
+          className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${
+            tab === "suggestions"
+              ? "bg-white text-gray-800 shadow-sm"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Suggestions
+        </button>
       </div>
+
+      {/* Tab content */}
+      {tab === "scorecard" && result.scorecard && (
+        <ScorecardPanel scorecard={result.scorecard} />
+      )}
+
+      {tab === "suggestions" && (
+        <div className="flex flex-col gap-2">
+          {sortedIssues.map((issue, idx) => (
+            <SuggestionCard
+              key={issue.id}
+              issue={issue}
+              index={idx + 1}
+              accepted={acceptedIds.has(issue.id)}
+              onAccept={() => setAcceptedIds((prev) => new Set([...prev, issue.id]))}
+              onReject={() => setAcceptedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; })}
+            />
+          ))}
+        </div>
+      )}
 
       <button
         onClick={onReset}

@@ -3,7 +3,7 @@ import { join } from "path";
 import { anthropic, MODEL } from "../lib/anthropic.js";
 import type { PrdEntities } from "../prompts/prd-extraction.prompt.js";
 import type { RepoIndex } from "./repo-indexer.js";
-import type { Issue } from "@alucify/shared-types";
+import type { Issue, Scorecard, DiffHunk } from "@alucify/shared-types";
 
 // process.cwd() is apps/api/ when started via pnpm dev
 const AGENT_FILE = join(process.cwd(), "src/agents/prd-auditor.md");
@@ -70,10 +70,10 @@ export async function runPrdAudit(
     try {
       const response = await anthropic.messages.create({
         model: MODEL,
-        max_tokens: 4096,
+        max_tokens: 16000,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }],
-      }, { timeout: 180_000 }); // 3-minute timeout per attempt
+      }, { timeout: 300_000 }); // 5-minute timeout per attempt
       return response.content[0].type === "text" ? response.content[0].text : "";
     } catch (err: unknown) {
       lastErr = err;
@@ -117,6 +117,51 @@ function extractField(block: string, field: string): string {
 }
 
 /**
+ * Parse the **Diff**: section of an issue block into DiffHunk[].
+ * Format:
+ *   >>> Section Title
+ *   - original text line 1
+ *   - original text line 2
+ *   + replacement text line 1
+ *   + replacement text line 2
+ *   <<<
+ */
+function extractDiffs(block: string): DiffHunk[] {
+  const diffSection = block.match(/\*\*Diff\*\*:\s*([\s\S]*?)(?=\n\*\*[A-Z]|$)/i)?.[1] ?? "";
+  if (!diffSection.trim()) return [];
+
+  const hunks: DiffHunk[] = [];
+  const hunkPattern = />>>\s*(.+?)\n([\s\S]*?)<<</g;
+  let match;
+
+  while ((match = hunkPattern.exec(diffSection)) !== null) {
+    const sectionTitle = match[1].trim();
+    const body = match[2];
+
+    const beforeLines: string[] = [];
+    const afterLines: string[] = [];
+
+    for (const line of body.split("\n")) {
+      if (line.startsWith("- ")) beforeLines.push(line.slice(2));
+      else if (line.startsWith("+ ")) afterLines.push(line.slice(2));
+    }
+
+    const before = beforeLines.join("\n").trim();
+    const after = afterLines.join("\n").trim();
+
+    if (sectionTitle && after) {
+      hunks.push({
+        sectionTitle,
+        before: before === "[none]" ? "" : before,
+        after,
+      });
+    }
+  }
+
+  return hunks;
+}
+
+/**
  * Parse the structured issue blocks emitted by prd-auditor.md and convert to Issue[].
  * Expected format per issue:
  *   ### Issue N
@@ -127,6 +172,12 @@ function extractField(block: string, field: string): string {
  *   **Evidence**: ...
  *   **Risk**: ...
  *   **Resolution**: ...
+ *   **Suggestion**: ...
+ *   **Diff**:
+ *   >>> Section Title
+ *   - original text
+ *   + new text
+ *   <<<
  */
 export function auditReportToIssues(markdownReport: string): Issue[] {
   const issues: Issue[] = [];
@@ -146,15 +197,20 @@ export function auditReportToIssues(markdownReport: string): Issue[] {
     const category = extractField(block, "Category").toLowerCase();
     const affectedArea: Issue["affectedArea"] = (CATEGORY_AREA[category] ?? "other") as Issue["affectedArea"];
 
+    const suggestion = extractField(block, "Suggestion") || undefined;
+    const diffs = extractDiffs(block);
+
     issues.push({
       id: `audit-${i + 1}`,
       summary: title.slice(0, 200),
-      description: extractField(block, "Description").slice(0, 1000),
+      description: extractField(block, "Description").slice(0, 500),
       impact,
-      recommendation: extractField(block, "Resolution").slice(0, 1000),
+      recommendation: suggestion ?? "",
       affectedArea,
-      evidence: extractField(block, "Evidence").slice(0, 500) || undefined,
-      risk: extractField(block, "Risk").slice(0, 500) || undefined,
+      evidence: extractField(block, "Evidence").slice(0, 300) || undefined,
+      suggestion,
+      diffs: diffs.length > 0 ? diffs : undefined,
+      accepted: true,
     });
   }
 
@@ -173,4 +229,26 @@ export function auditReportToIssues(markdownReport: string): Issue[] {
   }
 
   return issues.slice(0, 30);
+}
+
+// ── Parse scorecard JSON block ─────────────────────────────────────────────────
+
+export function scorecardFromReport(markdownReport: string): Scorecard | undefined {
+  // Log the tail of the report so we can verify the LLM produced the scorecard block
+  const tail = markdownReport.slice(-800);
+  console.log("[scorecardFromReport] report tail:\n", tail);
+
+  const match = markdownReport.match(/## Scorecard\s*```json\s*([\s\S]*?)```/);
+  if (!match) {
+    console.warn("[scorecardFromReport] No scorecard block found in report");
+    return undefined;
+  }
+  try {
+    const scorecard = JSON.parse(match[1]) as Scorecard;
+    console.log("[scorecardFromReport] Parsed successfully, overallScore=", scorecard.overallScore);
+    return scorecard;
+  } catch (err) {
+    console.warn("[scorecardFromReport] JSON parse failed:", err, "\nRaw match:\n", match[1]);
+    return undefined;
+  }
 }

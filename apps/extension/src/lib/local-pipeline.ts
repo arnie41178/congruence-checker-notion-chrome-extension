@@ -1,4 +1,4 @@
-import type { RepoContext, RepoFile, AnalysisResult, Issue } from "@alucify/shared-types";
+import type { RepoContext, RepoFile, AnalysisResult, Issue, Scorecard } from "@alucify/shared-types";
 import AUDIT_AGENT_RAW from "../agents/prd-auditor.md?raw";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -321,6 +321,16 @@ function deriveBadge(issues: Issue[]): AnalysisResult["badge"] {
   return "ready";
 }
 
+function scorecardFromReport(markdownReport: string): Scorecard | undefined {
+  const match = markdownReport.match(/## Scorecard\s*```json\s*([\s\S]*?)```/);
+  if (!match) return undefined;
+  try {
+    return JSON.parse(match[1]) as Scorecard;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function runLocalPipeline(
@@ -353,6 +363,7 @@ export async function runLocalPipeline(
   onProgress({ stage: 4, stageLabel: STAGE_LABELS[3] });
   const issues = auditReportToIssues(auditReport);
   const badge = deriveBadge(issues);
+  const scorecard = scorecardFromReport(auditReport);
 
   return {
     jobId,
@@ -361,5 +372,6 @@ export async function runLocalPipeline(
     badge,
     issues,
     analyzedAt: new Date().toISOString(),
+    ...(scorecard ? { scorecard } : {}),
   };
 }

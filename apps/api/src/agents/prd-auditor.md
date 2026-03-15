@@ -291,10 +291,14 @@ Return the audit report as a markdown document with the following structure.
 **Title**: [concise title, max 120 chars]
 **Category**: [Terminology | Conflict | Duplication | Missing]
 **Severity**: [Critical | Major | Minor]
-**Description**: [1-3 sentences explaining the issue clearly]
+**Description**: [1-2 sentences explaining the issue clearly]
 **Evidence**: [specific reference — PRD section name, codebase file path, or route that surfaces the problem]
-**Risk**: [what goes wrong during implementation if this is not addressed]
-**Resolution**: [concrete action the PRD author must take to fix this]
+**Suggestion**: [one sentence: what specifically changes in the PRD to fix this]
+**Diff**:
+>>> [PRD section title where the change applies]
+- [exact original PRD text to remove — quote verbatim; use "[none]" if this is a pure addition]
++ [replacement or new text to add]
+<<<
 
 ### Issue 2
 **Title**: ...
@@ -302,10 +306,21 @@ Return the audit report as a markdown document with the following structure.
 **Severity**: ...
 **Description**: ...
 **Evidence**: ...
-**Risk**: ...
-**Resolution**: ...
+**Suggestion**: ...
+**Diff**:
+>>> [section title]
+- [original text or "[none]"]
++ [new text]
+<<<
 
 [Continue for all findings, numbered sequentially]
+
+Rules for the Diff field:
+- Each >>> / <<< block is one hunk. The section title goes on the >>> line after a space.
+- Lines starting with "- " are PRD text to remove (quote verbatim from the PRD).
+- Lines starting with "+ " are the replacement or addition.
+- Include exactly 1 hunk per issue. If the fix requires no specific text change (e.g. purely conceptual), write a single hunk with "- [none]" and the "+ " line describing what to add.
+- Do NOT add a diff for issues where the PRD has no existing text to modify and the location is unclear — use "- [none]" in that case.
 
 ---
 
@@ -317,6 +332,43 @@ Return the audit report as a markdown document with the following structure.
 | Major    | [n]   |
 | Minor    | [n]   |
 | **Total**| [n]   |
+
+---
+
+## Scorecard
+
+```json
+{
+  "overallScore": <integer 0-10>,
+  "overallSummary": "<max 120 characters: one tight sentence on overall PRD quality and readiness>",
+  "topPriorities": [
+    "<most important action item across all categories, max 80 characters>",
+    "<second most important action item, max 80 characters>",
+    "<third most important action item, max 80 characters>"
+  ],
+  "categories": {
+    "terminology": {
+      "score": <integer 0-10>,
+      "summary": "<max 80 characters: one tight sentence on terminology strength or weakness>",
+      "suggestions": ["<concrete suggestion, max 80 characters>", "<concrete suggestion, max 80 characters>"]
+    },
+    "conflicts": {
+      "score": <integer 0-10>,
+      "summary": "<max 80 characters: one tight sentence on implicit conflict quality>",
+      "suggestions": ["<concrete suggestion, max 80 characters>", "<concrete suggestion, max 80 characters>"]
+    },
+    "duplication": {
+      "score": <integer 0-10>,
+      "summary": "<max 80 characters: one tight sentence on duplicated functionality findings>",
+      "suggestions": ["<concrete suggestion, max 80 characters>", "<concrete suggestion, max 80 characters>"]
+    },
+    "missing": {
+      "score": <integer 0-10>,
+      "summary": "<max 80 characters: one tight sentence on missing requirements findings>",
+      "suggestions": ["<concrete suggestion, max 80 characters>", "<concrete suggestion, max 80 characters>"]
+    }
+  }
+}
 ```
 
 ---

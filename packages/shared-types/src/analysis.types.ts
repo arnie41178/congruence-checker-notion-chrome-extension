@@ -1,6 +1,30 @@
 export type IssueImpact = "critical" | "high" | "medium" | "low";
 export type ReadinessBadge = "not-ready" | "needs-work" | "mostly-ready" | "ready";
 
+export interface CategoryScore {
+  score: number;         // 0–10
+  summary: string;       // 1–2 sentence description
+  suggestions: string[]; // top 2–3 action items
+}
+
+export interface Scorecard {
+  overallScore: number;
+  overallSummary: string;
+  topPriorities: string[];
+  categories: {
+    terminology: CategoryScore;
+    conflicts: CategoryScore;
+    duplication: CategoryScore;
+    missing: CategoryScore;
+  };
+}
+
+export interface DiffHunk {
+  sectionTitle: string; // PRD section this hunk applies to
+  before: string;       // original PRD text to replace (empty string = pure addition)
+  after: string;        // suggested replacement / addition
+}
+
 export interface Issue {
   id: string;
   summary: string;
@@ -10,6 +34,9 @@ export interface Issue {
   affectedArea?: string;
   evidence?: string;
   risk?: string;
+  suggestion?: string;  // 1-sentence fix description
+  diffs?: DiffHunk[];   // 0–3 PRD text hunks to change
+  accepted?: boolean;   // UI state: default true
 }
 
 export interface AnalysisResult {
@@ -19,6 +46,7 @@ export interface AnalysisResult {
   badge: ReadinessBadge;
   issues: Issue[];
   analyzedAt: string;
+  scorecard?: Scorecard;
 }
 
 export interface RepoFile {
