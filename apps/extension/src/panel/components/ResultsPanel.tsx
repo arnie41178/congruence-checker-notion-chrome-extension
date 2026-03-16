@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, IssueImpact } from "@alucify/shared-types";
 import { SuggestionCard } from "./SuggestionCard";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { downloadJson, downloadMarkdown } from "../../lib/download";
-import { formatMarkdownReport } from "../../lib/report-formatter";
+import { formatMarkdownReport, formatResolutionPrompt } from "../../lib/report-formatter";
 
 const IMPACT_ORDER: Record<IssueImpact, number> = {
   critical: 0,
@@ -30,29 +30,56 @@ interface Props {
 
 export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, onResultsViewed }: Props) {
   const hasScorecard = !!result.scorecard;
-  const [tab, setTab] = useState<Tab>(hasScorecard ? "scorecard" : "suggestions");
+  // Always default to Scorecard tab; fall back to suggestions if no scorecard
+  const [tab, setTab] = useState<Tab>("scorecard");
 
   // All issues accepted by default
   const [acceptedIds, setAcceptedIds] = useState<Set<string>>(
     () => new Set(result.issues.map((i) => i.id))
   );
 
+  const [copied, setCopied] = useState(false);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     onResultsViewed();
+    // If no scorecard, start on suggestions
+    if (!hasScorecard) setTab("suggestions");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showDownloadMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDownloadMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showDownloadMenu]);
 
   const badge = BADGE_CONFIG[result.badge];
   const fileSlug = `congruence-report-${result.jobId}`;
 
-  // Attach accepted state to issues before passing to downloads
   const issuesWithAccepted = result.issues.map((i) => ({ ...i, accepted: acceptedIds.has(i.id) }));
 
+  const handleCopyPrompt = async () => {
+    const prompt = formatResolutionPrompt(result, acceptedIds);
+    await navigator.clipboard.writeText(prompt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   const handleDownloadMarkdown = () => {
+    setShowDownloadMenu(false);
     downloadMarkdown(`${fileSlug}.md`, formatMarkdownReport({ ...result, issues: issuesWithAccepted }));
   };
 
   const handleDownloadJson = () => {
+    setShowDownloadMenu(false);
     downloadJson(`${fileSlug}.json`, { ...result, issues: issuesWithAccepted });
   };
 
@@ -75,31 +102,22 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
         </span>
       </div>
 
-      {/* Download buttons */}
-      <div className="flex gap-2">
-        <button
-          onClick={handleDownloadMarkdown}
-          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50 hover:border-gray-300"
-        >
-          Download Report (.md)
-        </button>
-        <button
-          onClick={handleDownloadJson}
-          className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50 hover:border-gray-300"
-        >
-          Download JSON
-        </button>
-      </div>
+      <button
+        onClick={onReset}
+        className="text-xs text-gray-400 hover:text-gray-600 underline self-center -mt-2"
+      >
+        Run another check
+      </button>
 
-      {/* Tab switcher */}
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+      {/* Tab switcher — prominent active state */}
+      <div className="flex gap-1 bg-gray-200 rounded-xl p-1">
         {hasScorecard && (
           <button
             onClick={() => setTab("scorecard")}
-            className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${
+            className={`flex-1 text-xs font-semibold py-2 rounded-lg transition-all ${
               tab === "scorecard"
-                ? "bg-white text-gray-800 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
+                ? "bg-blue-600 text-white shadow-sm"
+                : "text-gray-500 hover:text-gray-800"
             }`}
           >
             Scorecard
@@ -107,10 +125,10 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
         )}
         <button
           onClick={() => setTab("suggestions")}
-          className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${
+          className={`flex-1 text-xs font-semibold py-2 rounded-lg transition-all ${
             tab === "suggestions"
-              ? "bg-white text-gray-800 shadow-sm"
-              : "text-gray-500 hover:text-gray-700"
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-gray-500 hover:text-gray-800"
           }`}
         >
           Suggestions
@@ -123,26 +141,67 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
       )}
 
       {tab === "suggestions" && (
-        <div className="flex flex-col gap-2">
-          {sortedIssues.map((issue, idx) => (
-            <SuggestionCard
-              key={issue.id}
-              issue={issue}
-              index={idx + 1}
-              accepted={acceptedIds.has(issue.id)}
-              onAccept={() => setAcceptedIds((prev) => new Set([...prev, issue.id]))}
-              onReject={() => setAcceptedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; })}
-            />
-          ))}
-        </div>
+        <>
+          {/* Copy Resolution Prompt — subtle, sits just below the tab */}
+          <div className="flex gap-1 relative" ref={dropdownRef}>
+            <button
+              onClick={handleCopyPrompt}
+              className="flex-1 flex items-center justify-center gap-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg px-4 py-2 hover:bg-gray-50 hover:text-gray-700 hover:border-gray-300 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              {copied ? "Copied!" : "Copy Resolution Prompt"}
+            </button>
+            <button
+              onClick={() => setShowDownloadMenu((v) => !v)}
+              className="px-2.5 border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 hover:border-gray-300 rounded-lg transition-colors"
+              aria-label="More export options"
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${showDownloadMenu ? "rotate-180" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {showDownloadMenu && (
+              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[180px] overflow-hidden">
+                <button
+                  onClick={handleDownloadMarkdown}
+                  className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Download Report (.md)
+                </button>
+                <div className="border-t border-gray-100" />
+                <button
+                  onClick={handleDownloadJson}
+                  className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Download JSON
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            {sortedIssues.map((issue, idx) => (
+              <SuggestionCard
+                key={issue.id}
+                issue={issue}
+                index={idx + 1}
+                accepted={acceptedIds.has(issue.id)}
+                onAccept={() => setAcceptedIds((prev) => new Set([...prev, issue.id]))}
+                onReject={() => setAcceptedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; })}
+              />
+            ))}
+          </div>
+        </>
       )}
 
-      <button
-        onClick={onReset}
-        className="mt-2 text-xs text-gray-400 hover:text-gray-600 underline self-center"
-      >
-        Run another check
-      </button>
     </div>
   );
 }

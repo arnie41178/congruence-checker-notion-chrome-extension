@@ -93,6 +93,26 @@ export function RepoSelector({ state, onPick, onUseStored, onClear }: Props) {
         </p>
       </div>
 
+      {/* Source type selector */}
+      <div className="flex flex-col gap-2">
+        {/* GitHub Repo — disabled, coming soon */}
+        <div className="flex items-center gap-3 px-3 py-2.5 border border-gray-100 bg-gray-50 rounded-lg cursor-not-allowed opacity-60">
+          <span className="w-4 h-4 rounded-full border-2 border-gray-300 shrink-0" />
+          <span className="text-sm text-gray-400 flex-1">GitHub Repo</span>
+          <span className="text-xs font-medium text-gray-400 bg-gray-200 px-2 py-0.5 rounded-full">
+            Coming Soon
+          </span>
+        </div>
+
+        {/* Local Folder — selected, locked */}
+        <label className="flex items-center gap-3 px-3 py-2.5 border border-blue-200 bg-blue-50 rounded-lg cursor-default">
+          <span className="w-4 h-4 rounded-full border-2 border-blue-600 flex items-center justify-center shrink-0">
+            <span className="w-2 h-2 rounded-full bg-blue-600" />
+          </span>
+          <span className="text-sm font-medium text-gray-800">Local Folder</span>
+        </label>
+      </div>
+
       {/* Suggestion */}
       {suggestion && (
         <div className="border border-brand-100 bg-brand-50 rounded-lg p-3 flex items-center justify-between gap-2">
