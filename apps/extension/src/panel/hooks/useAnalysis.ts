@@ -35,7 +35,7 @@ export function useAnalysis() {
     }
   };
 
-  const startAnalysis = useCallback(async (notionPageId: string, repo?: RepoContext) => {
+  const startAnalysis = useCallback(async (notionPageId: string, repo?: RepoContext, prdText?: string) => {
     setState({ ...INITIAL, phase: "running", stage: 1, stageLabel: "Extracting PRD intent..." });
 
     try {
@@ -43,6 +43,7 @@ export function useAnalysis() {
         type: "START_ANALYSIS",
         notionPageId,
         repo,
+        ...(prdText ? { prdText } : {}),
       }) as { jobId: string } | { error: string };
 
       if ("error" in response) throw new Error(response.error);

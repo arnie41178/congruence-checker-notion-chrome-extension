@@ -37,6 +37,21 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   }
   // Open side panel when action icon is clicked
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  // Register context menu item for Notion selection review
+  chrome.contextMenus.create({
+    id: "alucify-technical-review",
+    title: "Technical Review",
+    contexts: ["selection"],
+    documentUrlPatterns: ["https://www.notion.so/*"],
+  });
+});
+
+// ── Context menu ───────────────────────────────────────────────────────────────
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "alucify-technical-review" || !tab?.windowId) return;
+  chrome.storage.local.set({ pendingSelection: info.selectionText ?? "" });
+  chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
 // ── Message handling ───────────────────────────────────────────────────────────
@@ -65,18 +80,23 @@ async function handleMessage(message: Record<string, unknown>) {
     }
 
     case "START_ANALYSIS": {
-      const { notionPageId, repo } = message as { type: string; notionPageId: string; repo?: RepoContext };
+      const { notionPageId, repo, prdText: explicitPrdText } = message as { type: string; notionPageId: string; repo?: RepoContext; prdText?: string };
       track("run_congruence_check_clicked", { notionPageId });
 
       const stored = await chrome.storage.local.get(["currentPrdText", "alucify_mode", "alucify_api_key"]);
       const mode = (stored.alucify_mode as string) ?? "remote";
       const cachedPrdText = (stored.currentPrdText as string) ?? "";
 
-      // Always try a fresh extraction from the active tab first (most reliable)
-      // Fall back to cached storage if fresh extraction returns too little
-      let prdText = await extractPrdTextFromActiveTab();
-      if (prdText.trim().length < 50) {
-        prdText = cachedPrdText;
+      // If prdText was explicitly passed (e.g. from a selection review), use it directly.
+      // Otherwise extract fresh from the active tab, falling back to cached.
+      let prdText: string;
+      if (explicitPrdText) {
+        prdText = explicitPrdText;
+      } else {
+        prdText = await extractPrdTextFromActiveTab();
+        if (prdText.trim().length < 50) {
+          prdText = cachedPrdText;
+        }
       }
       console.log(`[Alucify SW] START_ANALYSIS mode=${mode} notionPageId=${notionPageId} freshPrdLength=${prdText.length} cachedPrdLength=${cachedPrdText.length} repoFiles=${repo?.files?.map(f => f.path)}`);
 

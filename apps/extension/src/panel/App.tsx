@@ -11,7 +11,7 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 import { OnboardingScreen } from "./components/OnboardingScreen";
 import type { AnalysisMode } from "./hooks/useSettings";
 
-type AppStep = "onboarding" | "idle" | "repo_selection" | "running" | "results" | "error";
+type AppStep = "onboarding" | "idle" | "repo_selection" | "selection_review" | "running" | "results" | "error";
 
 export default function App() {
   const { pageId, source, refresh: refreshPage } = useNotionPage();
@@ -20,11 +20,30 @@ export default function App() {
   const { state: settings, save: saveSettings } = useSettings();
   const [step, setStep] = useState<AppStep>("idle");
   const [showSettings, setShowSettings] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<string>("");
 
   // Notify background when panel opens
   useEffect(() => {
     chrome.runtime.sendMessage({ type: "PANEL_OPENED" });
     return () => { chrome.runtime.sendMessage({ type: "PANEL_CLOSED" }); };
+  }, []);
+
+  // Detect pending selection (from context menu "Technical Review")
+  useEffect(() => {
+    chrome.storage.local.get("pendingSelection", (result) => {
+      if (result.pendingSelection) {
+        setPendingSelection(result.pendingSelection as string);
+        setStep("selection_review");
+      }
+    });
+    const listener = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (changes.pendingSelection?.newValue) {
+        setPendingSelection(changes.pendingSelection.newValue as string);
+        setStep("selection_review");
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
   }, []);
 
   // Once settings load, show onboarding if mode was never set
@@ -41,32 +60,37 @@ export default function App() {
     if (analysis.phase === "error") setStep("error");
   }, [analysis.phase]);
 
-  // When repo is selected and we were in repo_selection, kick off analysis
+  // When repo is selected and we were in repo_selection or selection_review, kick off analysis
   useEffect(() => {
-    if (step === "repo_selection" && repo.selected && repo.lastResult) {
-      console.log("[Alucify] repo files being sent:", repo.lastResult.files.map(f => f.path));
-      const repoPayload = {
-        name: repo.selected.name,
-        files: repo.lastResult.files,
-        meta: {
-          totalFiles: repo.lastResult.totalFiles,
-          totalChars: repo.lastResult.totalChars,
-        },
-      };
-      chrome.runtime.sendMessage({
-        type: "TRACK",
-        event: "repo_selected",
-        properties: {
-          repoName: repo.selected.name,
-          fileCount: repo.selected.fileCount,
-          totalChars: repo.selected.totalChars,
-          wasCapped: repo.lastResult.wasCapped,
-          notionPageId: pageId,
-        },
-      });
+    if (!repo.selected || !repo.lastResult) return;
+    if (step !== "repo_selection" && step !== "selection_review") return;
+    console.log("[Alucify] repo files being sent:", repo.lastResult.files.map(f => f.path));
+    const repoPayload = {
+      name: repo.selected.name,
+      files: repo.lastResult.files,
+      meta: {
+        totalFiles: repo.lastResult.totalFiles,
+        totalChars: repo.lastResult.totalChars,
+      },
+    };
+    chrome.runtime.sendMessage({
+      type: "TRACK",
+      event: "repo_selected",
+      properties: {
+        repoName: repo.selected.name,
+        fileCount: repo.selected.fileCount,
+        totalChars: repo.selected.totalChars,
+        wasCapped: repo.lastResult.wasCapped,
+        notionPageId: pageId,
+      },
+    });
+    if (step === "selection_review") {
+      chrome.storage.local.remove("pendingSelection");
+      startAnalysis(pageId ?? "unknown", repoPayload, pendingSelection);
+    } else {
       startAnalysis(pageId ?? "unknown", repoPayload);
     }
-  }, [repo.selected, repo.lastResult, step]);
+  }, [repo.selected, repo.lastResult, step, pendingSelection]);
 
   const handleOnboardingComplete = (mode: AnalysisMode, apiKey: string) => {
     saveSettings(mode, apiKey);
@@ -81,6 +105,12 @@ export default function App() {
   const handleReset = () => {
     resetAnalysis();
     clearSelection();
+    setStep("idle");
+  };
+
+  const handleCancelSelection = () => {
+    chrome.storage.local.remove("pendingSelection");
+    setPendingSelection("");
     setStep("idle");
   };
 
@@ -114,8 +144,14 @@ export default function App() {
 
       {/* Header — brand row */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
-        <img src="/logo.png" alt="Alucify" className="w-7 h-7 shrink-0 object-contain" />
-        <span className="flex-1 text-base font-bold text-gray-900 tracking-tight">Alucify</span>
+        <button
+          onClick={handleCancelSelection}
+          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+          aria-label="Go to home"
+        >
+          <img src="/logo.png" alt="Alucify" className="w-7 h-7 shrink-0 object-contain" />
+          <span className="text-base font-bold text-gray-900 tracking-tight">Alucify</span>
+        </button>
 
         {/* Gear */}
         <button
@@ -170,6 +206,25 @@ export default function App() {
             onUseStored={useStoredRepo}
             onClear={clearSelection}
           />
+        )}
+
+        {step === "selection_review" && (
+          <div className="p-4 flex flex-col gap-4">
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                Selected text
+              </p>
+              <p className="text-sm text-gray-700 italic line-clamp-2">
+                "{pendingSelection.slice(0, 80)}{pendingSelection.length > 80 ? "..." : ""}"
+              </p>
+            </div>
+            <RepoSelector
+              state={repo}
+              onPick={pickAndRead}
+              onUseStored={useStoredRepo}
+              onClear={clearSelection}
+            />
+          </div>
         )}
 
         {step === "running" && (

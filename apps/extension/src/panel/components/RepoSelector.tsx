@@ -115,32 +115,35 @@ export function RepoSelector({ state, onPick, onUseStored, onClear }: Props) {
 
       {/* Suggestion */}
       {suggestion && (
-        <div className="border border-brand-100 bg-brand-50 rounded-lg p-3 flex items-center justify-between gap-2">
+        <div className="border border-gray-200 bg-gray-100 rounded-xl p-3 flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-xs text-brand-600 font-medium mb-0.5">Previously used</p>
+            <p className="text-xs text-gray-500 font-medium mb-0.5">Previously used</p>
             <p className="text-sm font-medium text-gray-800 truncate">{suggestion.name}</p>
             <p className="text-xs text-gray-400">
               {suggestion.fileCount} files · {timeAgo(suggestion.lastUsedAt)}
             </p>
           </div>
           <button
-            onClick={() => onUseStored(suggestion.id)}
-            className="shrink-0 text-xs font-medium bg-brand-500 hover:bg-brand-600 text-white px-3 py-1.5 rounded-md transition-colors"
+            onClick={onPick}
+            className="shrink-0 text-xs font-medium border border-gray-400 text-gray-600 hover:bg-gray-200 px-3 py-1.5 rounded-md transition-colors"
           >
-            Use this
+            Select
           </button>
         </div>
       )}
 
-      <button
-        onClick={onPick}
-        className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 hover:border-brand-400 hover:bg-brand-50 text-gray-600 hover:text-brand-600 rounded-lg py-4 text-sm font-medium transition-colors"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-        </svg>
-        Browse folder...
-      </button>
+      {/* Primary CTA — run analysis with suggested repo */}
+      <div className="bg-gray-100 rounded-xl p-3">
+        <button
+          onClick={() => suggestion ? onUseStored(suggestion.id) : onPick()}
+          className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 text-sm font-semibold transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          Run Analysis
+        </button>
+      </div>
 
       {/* History */}
       {history.length > 1 && (
