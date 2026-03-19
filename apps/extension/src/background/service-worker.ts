@@ -17,6 +17,9 @@ const localJobs = new Map<string, LocalJobState>();
 const API_BASE = (self as unknown as { VITE_API_BASE?: string }).VITE_API_BASE
   ?? "http://localhost:3001";
 
+// Replaced at build time by Vite's define config (vite.config.ts)
+declare const VITE_NOTION_CLIENT_ID: string;
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function bootstrap() {
@@ -162,6 +165,75 @@ async function handleMessage(message: Record<string, unknown>) {
       return { ok: true };
     }
 
+    case "NOTION_AUTH": {
+      const redirectUri = chrome.identity.getRedirectURL();
+      const clientId = VITE_NOTION_CLIENT_ID ?? "";
+      const authUrl = `https://api.notion.com/v1/oauth/authorize?client_id=${clientId}&response_type=code&owner=user&redirect_uri=${encodeURIComponent(redirectUri)}`;
+      console.log("[Alucify SW] NOTION_AUTH clientId:", clientId, "redirectUri:", redirectUri);
+
+      const responseUrl: string = await new Promise((resolve, reject) =>
+        chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true },
+          (url) => url ? resolve(url) : reject(new Error(chrome.runtime.lastError?.message ?? "Auth flow failed")))
+      );
+
+      const code = new URL(responseUrl).searchParams.get("code");
+      if (!code) throw new Error("No auth code returned from Notion.");
+
+      const res = await fetch(`${API_BASE}/auth/notion/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, redirectUri }),
+      });
+      if (!res.ok) throw new Error(`Token exchange failed: ${await res.text()}`);
+      const data = await res.json() as { access_token: string; workspace_name: string };
+      await chrome.storage.local.set({
+        alucify_notion_token: data.access_token,
+        alucify_notion_workspace: data.workspace_name,
+      });
+      return { ok: true, workspace: data.workspace_name };
+    }
+
+    case "APPLY_CHANGES": {
+      const { notionPageId, diffs } = message as { type: string; notionPageId: string | null; diffs: Array<{ issueId: string; sectionTitle: string; before: string; after: string }> };
+      if (!notionPageId) return { applied: 0, errors: ["Notion page ID not detected. Navigate to your Notion page and re-detect it before applying changes."] };
+      let stored = await chrome.storage.local.get("alucify_notion_token");
+      let token = stored.alucify_notion_token as string;
+
+      if (!token) {
+        await handleMessage({ type: "NOTION_AUTH" });
+        stored = await chrome.storage.local.get("alucify_notion_token");
+        token = stored.alucify_notion_token as string;
+        if (!token) throw new Error("Notion authorization was cancelled.");
+      }
+
+      const blocks = await fetchAllNotionBlocks(token, notionPageId);
+      let applied = 0;
+      const errors: string[] = [];
+      const appliedIssueIds: string[] = [];
+
+      for (const diff of diffs) {
+        try {
+          if (!diff.before) {
+            const heading = blocks.find((b) => getNotionBlockText(b).toLowerCase().includes(diff.sectionTitle.toLowerCase()));
+            const parentId = heading?.parentId ?? notionPageId;
+            const afterId = heading?.id;
+            await appendNotionBlock(token, parentId, diff.after, afterId);
+          } else {
+            const normalizedBefore = normalizeWS(diff.before);
+            const block = blocks.find((b) => normalizeWS(getNotionBlockText(b)).includes(normalizedBefore));
+            if (!block) { errors.push(`Text not found: "${diff.before.slice(0, 40)}..."`); continue; }
+            const newText = normalizeWS(getNotionBlockText(block)).replace(normalizedBefore, normalizeWS(diff.after));
+            await updateNotionBlock(token, block.id, block.type, newText);
+          }
+          applied++;
+          if (!appliedIssueIds.includes(diff.issueId)) appliedIssueIds.push(diff.issueId);
+        } catch (e) {
+          errors.push(String(e));
+        }
+      }
+      return { applied, errors, appliedIssueIds };
+    }
+
     default:
       return { error: "unknown_message_type" };
   }
@@ -261,4 +333,68 @@ async function pollJob(clientId: string, jobId: string) {
     headers: { "X-Client-ID": clientId },
   });
   return res.json();
+}
+
+// ── Notion API helpers ─────────────────────────────────────────────────────────
+
+const NOTION_VERSION = "2022-06-28";
+const NOTION_BASE = "https://api.notion.com/v1";
+
+interface NotionBlock {
+  id: string;
+  type: string;
+  has_children: boolean;
+  parentId?: string;
+  [key: string]: unknown;
+}
+
+async function fetchAllNotionBlocks(token: string, blockId: string, parentId?: string): Promise<NotionBlock[]> {
+  const res = await fetch(`${NOTION_BASE}/blocks/${blockId}/children?page_size=100`, {
+    headers: { Authorization: `Bearer ${token}`, "Notion-Version": NOTION_VERSION },
+  });
+  const data = await res.json() as { results: NotionBlock[] };
+  const blocks = (data.results ?? []).map((b) => ({ ...b, parentId: parentId ?? blockId }));
+  const nested = await Promise.all(
+    blocks.filter((b) => b.has_children).map((b) => fetchAllNotionBlocks(token, b.id, blockId))
+  );
+  return [...blocks, ...nested.flat()];
+}
+
+function getNotionBlockText(block: NotionBlock): string {
+  const content = block[block.type] as { rich_text?: Array<{ plain_text: string }> } | undefined;
+  return (content?.rich_text ?? []).map((rt) => rt.plain_text).join("");
+}
+
+function normalizeWS(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+async function updateNotionBlock(token: string, blockId: string, blockType: string, newText: string) {
+  const res = await fetch(`${NOTION_BASE}/blocks/${blockId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Notion-Version": NOTION_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ [blockType]: { rich_text: [{ type: "text", text: { content: newText } }] } }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+async function appendNotionBlock(token: string, parentId: string, text: string, afterId?: string) {
+  const body: Record<string, unknown> = {
+    children: [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: text } }] } }],
+  };
+  if (afterId) body.after = afterId;
+  const res = await fetch(`${NOTION_BASE}/blocks/${parentId}/children`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Notion-Version": NOTION_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }

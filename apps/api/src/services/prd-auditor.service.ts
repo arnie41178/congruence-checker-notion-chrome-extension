@@ -18,7 +18,8 @@ async function loadAgentSystemPrompt(): Promise<string> {
 function buildAuditUserMessage(
   prdText: string,
   prdEntities: PrdEntities,
-  repoIndex: RepoIndex
+  repoIndex: RepoIndex,
+  graphContext: string | null
 ): string {
   const entitySummary = [
     `Entities: ${prdEntities.entities.join(", ") || "none"}`,
@@ -30,6 +31,10 @@ function buildAuditUserMessage(
 
   const repoSummary = buildRepoSummary(repoIndex);
 
+  const graphSection = graphContext
+    ? `\n## Codebase Symbol Graph\n${graphContext}\n`
+    : "";
+
   return `## PRD Text
 ${prdText.slice(0, 30_000)}
 
@@ -37,8 +42,7 @@ ${prdText.slice(0, 30_000)}
 ${entitySummary}
 
 ## Repository Index
-${repoSummary}
-
+${repoSummary}${graphSection}
 Perform the PRD audit and return the full markdown audit report.`;
 }
 
@@ -58,10 +62,11 @@ function buildRepoSummary(index: RepoIndex): string {
 export async function runPrdAudit(
   prdText: string,
   prdEntities: PrdEntities,
-  repoIndex: RepoIndex
+  repoIndex: RepoIndex,
+  graphContext: string | null = null
 ): Promise<string> {
   const systemPrompt = await loadAgentSystemPrompt();
-  const userMessage = buildAuditUserMessage(prdText, prdEntities, repoIndex);
+  const userMessage = buildAuditUserMessage(prdText, prdEntities, repoIndex, graphContext);
 
   const MAX_RETRIES = 3;
   let lastErr: unknown;

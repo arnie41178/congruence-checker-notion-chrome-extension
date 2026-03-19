@@ -8,6 +8,7 @@ import {
   type PrdEntities,
 } from "../prompts/prd-extraction.prompt.js";
 import { runPrdAudit, auditReportToIssues, scorecardFromReport } from "./prd-auditor.service.js";
+import { buildGraphContextFromRepo } from "./graph-context.js";
 import type { AnalysisRequest, AnalysisResult, Issue } from "@alucify/shared-types";
 
 const STAGE_LABELS = [
@@ -44,6 +45,9 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
 
   console.log(`[Analysis ${jobId}] prdText length=${prdText.length} preview="${prdText.slice(0, 120).replace(/\n/g, " ")}"`);
 
+  // Load graph context once — shared across all stages that use it
+  const graphContext = await buildGraphContextFromRepo(repo);
+
   // ── Stage 1: Extract PRD entities ─────────────────────────────────────────
   await updateJob(jobId, { status: "running", stage: 1, stageLabel: STAGE_LABELS[0] });
 
@@ -57,7 +61,7 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
         model: MODEL,
         max_tokens: 2048,
         system: PRD_EXTRACTION_SYSTEM,
-        messages: [{ role: "user", content: buildPrdExtractionPrompt(prdText) }],
+        messages: [{ role: "user", content: buildPrdExtractionPrompt(prdText, graphContext) }],
       });
       const raw = extraction.content[0].type === "text" ? extraction.content[0].text : "{}";
       const cleaned = raw.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
@@ -75,7 +79,7 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
   // ── Stage 3: PRD Auditor agent (prd-auditor.md) ───────────────────────────
   await updateJob(jobId, { stage: 3, stageLabel: STAGE_LABELS[2] });
 
-  const auditReport = await runPrdAudit(prdText, prdEntities, repoIndex);
+  const auditReport = await runPrdAudit(prdText, prdEntities, repoIndex, graphContext);
 
   // ── Stage 4: Map audit report → structured issues ─────────────────────────
   await updateJob(jobId, { stage: 4, stageLabel: STAGE_LABELS[3] });

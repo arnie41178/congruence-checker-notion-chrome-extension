@@ -48,6 +48,26 @@ Structured extraction of key concepts from the PRD:
 - **Tech Requirements**: Technical constraints or stack requirements
 - **Integrations**: Third-party services or systems mentioned
 
+## Codebase Symbol Graph (optional, when available)
+A symbolic graph representation of the codebase derived from static analysis, containing:
+
+### Execution Flows
+Named end-to-end workflows extracted from the call graph (e.g. "AnalysisRoutes → BuildRepoSummary"). Use these to understand what user journeys are already implemented and how deeply they are wired — compare against PRD user flows to find gaps or conflicts.
+
+### Type Contracts
+Interface definitions grouped by file — use these to understand the existing data model contracts and spot terminology mismatches with PRD entities.
+
+### Call Graph
+Directed function-call edges (e.g. `readRepository → walkDir`). Use these to trace data flow through the system and identify where PRD requirements would need to hook in or conflict with existing flows.
+
+### Import Dependencies
+Module-level import edges — use these to understand coupling between layers and flag PRD requirements that would create circular dependencies or violate existing architectural boundaries.
+
+### Function Inventory
+All named functions grouped by module area — use this as a comprehensive symbol catalogue to detect duplicate functionality proposed in the PRD and to verify whether PRD entities map to existing implementations.
+
+When the Symbol Graph is present, give it higher weight than the heuristic Repository Index for answering questions about existing functionality, data models, and execution flows — it is derived from actual static analysis of the code.
+
 # Audit Dimensions
 
 ## 1. Concept Terminology Consistency

@@ -31,34 +31,43 @@ function DiffHunkView({ hunk }: { hunk: DiffHunk }) {
 interface Props {
   issue: Issue;
   index: number;
-  accepted: boolean;
+  state: "pending" | "accepted" | "rejected";
+  applied: boolean;
   onAccept: () => void;
   onReject: () => void;
 }
 
-export function SuggestionCard({ issue, index, accepted, onAccept, onReject }: Props) {
+export function SuggestionCard({ issue, index, state, applied, onAccept, onReject }: Props) {
   const [diffOpen, setDiffOpen] = useState(false);
   const hasDiffs = issue.diffs && issue.diffs.length > 0;
   const impactColor = IMPACT_COLORS[issue.impact] ?? IMPACT_COLORS.low;
+  const isAccepted = state === "accepted";
+  const isRejected = state === "rejected";
 
   return (
     <div className={`border rounded-lg px-4 py-3 flex flex-col gap-2 transition-opacity ${
-      accepted ? "border-gray-200 bg-white" : "border-gray-200 bg-gray-50 opacity-60"
+      isRejected ? "border-gray-200 bg-gray-50 opacity-60" : "border-gray-200 bg-white"
     }`}>
       {/* Header: circle + title + badge */}
       <div className="flex items-start gap-2">
-        <button
-          onClick={accepted ? onReject : onAccept}
-          className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 transition-colors ${
-            accepted
-              ? "border-indigo-500 bg-indigo-500"
-              : "border-gray-300 bg-white"
-          }`}
-          title={accepted ? "Click to reject" : "Click to accept"}
-        />
+        {applied ? (
+          <div className="mt-0.5 w-4 h-4 rounded-full bg-green-500 shrink-0 flex items-center justify-center">
+            <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+        ) : (
+          <button
+            onClick={isAccepted ? onReject : onAccept}
+            className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 transition-colors ${
+              isAccepted ? "border-indigo-500 bg-indigo-500" : "border-gray-300 bg-white"
+            }`}
+            title={isAccepted ? "Click to reject" : "Click to accept"}
+          />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
-            <p className={`text-xs font-semibold text-gray-800 leading-snug ${!accepted ? "line-through text-gray-400" : ""}`}>
+            <p className={`text-xs font-semibold leading-snug ${isRejected ? "line-through text-gray-400" : "text-gray-800"}`}>
               Issue {index}: {issue.summary}
             </p>
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 uppercase ${impactColor}`}>
@@ -95,29 +104,38 @@ export function SuggestionCard({ issue, index, accepted, onAccept, onReject }: P
         </div>
       )}
 
-      {/* Accept / Reject buttons */}
-      <div className="flex gap-2 pl-6 pt-1">
-        <button
-          onClick={onAccept}
-          className={`text-xs px-3 py-1 rounded-md border transition-colors ${
-            accepted
-              ? "bg-indigo-500 text-white border-indigo-500"
-              : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-500"
-          }`}
-        >
-          Accept
-        </button>
-        <button
-          onClick={onReject}
-          className={`text-xs px-3 py-1 rounded-md border transition-colors ${
-            !accepted
-              ? "bg-gray-200 text-gray-700 border-gray-300"
-              : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700"
-          }`}
-        >
-          Reject
-        </button>
-      </div>
+      {/* Applied badge or Accept/Reject buttons */}
+      {applied ? (
+        <div className="flex items-center gap-1.5 pl-6 pt-1">
+          <svg className="w-3.5 h-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+          </svg>
+          <span className="text-xs font-semibold text-green-600">Applied</span>
+        </div>
+      ) : (
+        <div className="flex gap-2 pl-6 pt-1">
+          <button
+            onClick={onAccept}
+            className={`text-xs px-3 py-1 rounded-md border transition-colors ${
+              isAccepted
+                ? "bg-indigo-500 text-white border-indigo-500"
+                : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-500"
+            }`}
+          >
+            Accept
+          </button>
+          <button
+            onClick={onReject}
+            className={`text-xs px-3 py-1 rounded-md border transition-colors ${
+              isRejected
+                ? "bg-gray-200 text-gray-700 border-gray-300"
+                : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700"
+            }`}
+          >
+            Reject
+          </button>
+        </div>
+      )}
     </div>
   );
 }

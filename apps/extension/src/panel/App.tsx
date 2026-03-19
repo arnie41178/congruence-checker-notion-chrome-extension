@@ -17,7 +17,7 @@ export default function App() {
   const { pageId, source, refresh: refreshPage } = useNotionPage();
   const { state: analysis, startAnalysis, reset: resetAnalysis } = useAnalysis();
   const { state: repo, pickAndRead, useStoredRepo, clearSelection } = useRepoMemory(pageId);
-  const { state: settings, save: saveSettings } = useSettings();
+  const { state: settings, save: saveSettings, saveNotionConnection, clearNotionConnection } = useSettings();
   const [step, setStep] = useState<AppStep>("idle");
   const [showSettings, setShowSettings] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<string>("");
@@ -130,6 +130,22 @@ export default function App() {
     });
   };
 
+  const handleConnectNotion = async () => {
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "NOTION_AUTH" }) as { ok: boolean; workspace: string } | { error: string };
+      if ("error" in result) throw new Error(result.error);
+      const stored = await chrome.storage.local.get(["alucify_notion_token", "alucify_notion_workspace"]);
+      saveNotionConnection(stored.alucify_notion_token as string, stored.alucify_notion_workspace as string);
+    } catch (err) {
+      console.error("[Alucify] Notion auth failed:", err);
+      alert(`Notion connection failed: ${String(err)}`);
+    }
+  };
+
+  const handleDisconnectNotion = () => {
+    clearNotionConnection();
+  };
+
   return (
     <div className="min-h-screen bg-white flex flex-col relative">
       {/* Settings drawer (overlays everything) */}
@@ -137,7 +153,11 @@ export default function App() {
         <SettingsDrawer
           currentMode={settings.mode}
           currentApiKey={settings.apiKey}
+          notionToken={settings.notionToken}
+          notionWorkspace={settings.notionWorkspace}
           onSave={saveSettings}
+          onConnectNotion={handleConnectNotion}
+          onDisconnectNotion={handleDisconnectNotion}
           onClose={() => setShowSettings(false)}
         />
       )}
@@ -234,6 +254,7 @@ export default function App() {
         {step === "results" && analysis.result && (
           <ResultsPanel
             result={analysis.result}
+            notionPageId={pageId}
             onReset={handleReset}
             onIssueExpand={handleIssueExpand}
             onResultsViewed={handleResultsViewed}

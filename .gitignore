@@ -14,3 +14,10 @@ dist/
 apps/*/dist/
 packages/*/dist/
 node_modules
+.gitnexus
+*.crx
+*.pem
+*.zip
+
+# Claude Code memory
+.claude/

@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { analysisRoutes } from "./routes/analysis.routes.js";
+import { authRoutes } from "./routes/auth.routes.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -13,6 +14,7 @@ await app.register(cors, {
 });
 
 await app.register(analysisRoutes);
+await app.register(authRoutes);
 
 app.get("/health", async () => ({ status: "ok" }));
 

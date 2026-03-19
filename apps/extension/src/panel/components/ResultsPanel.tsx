@@ -23,23 +23,25 @@ type Tab = "scorecard" | "suggestions";
 
 interface Props {
   result: AnalysisResult;
+  notionPageId: string | null;
   onReset: () => void;
   onIssueExpand: (issueId: string) => void;
   onResultsViewed: () => void;
 }
 
-export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, onResultsViewed }: Props) {
+export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _onIssueExpand, onResultsViewed }: Props) {
   const hasScorecard = !!result.scorecard;
   // Always default to Scorecard tab; fall back to suggestions if no scorecard
   const [tab, setTab] = useState<Tab>("scorecard");
 
-  // All issues accepted by default
-  const [acceptedIds, setAcceptedIds] = useState<Set<string>>(
-    () => new Set(result.issues.map((i) => i.id))
-  );
+  const [acceptedIds, setAcceptedIds] = useState<Set<string>>(() => new Set<string>());
+  const [rejectedIds, setRejectedIds] = useState<Set<string>>(() => new Set<string>());
 
   const [copied, setCopied] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [applyState, setApplyState] = useState<"idle" | "applying" | "done">("idle");
+  const [applyResult, setApplyResult] = useState<{ applied: number; errors: string[]; appliedIssueIds?: string[] } | null>(null);
+  const [showAcceptHint, setShowAcceptHint] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
   const badge = BADGE_CONFIG[result.badge];
   const fileSlug = `congruence-report-${result.jobId}`;
 
-  const issuesWithAccepted = result.issues.map((i) => ({ ...i, accepted: acceptedIds.has(i.id) }));
+  const issuesWithAccepted = result.issues.map((i) => ({ ...i, accepted: acceptedIds.has(i.id) && !rejectedIds.has(i.id) }));
 
   const handleCopyPrompt = async () => {
     const prompt = formatResolutionPrompt(result, acceptedIds);
@@ -81,6 +83,44 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
   const handleDownloadJson = () => {
     setShowDownloadMenu(false);
     downloadJson(`${fileSlug}.json`, { ...result, issues: issuesWithAccepted });
+  };
+
+  const appliedIds = new Set(applyResult?.appliedIssueIds ?? []);
+
+  const pendingApplyCount = result.issues.filter(
+    (i) => acceptedIds.has(i.id) && !rejectedIds.has(i.id) && !appliedIds.has(i.id) && i.diffs?.length
+  ).length;
+
+  const handleApplyToDoc = async () => {
+    if (pendingApplyCount === 0) {
+      setShowAcceptHint(true);
+      return;
+    }
+    setShowAcceptHint(false);
+    const diffs = result.issues
+      .filter((i) => acceptedIds.has(i.id) && !rejectedIds.has(i.id) && !appliedIds.has(i.id) && i.diffs?.length)
+      .flatMap((i) => (i.diffs ?? []).map((d) => ({
+        issueId: i.id,
+        sectionTitle: d.sectionTitle,
+        before: d.before,
+        after: d.after,
+      })));
+    setApplyState("applying");
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "APPLY_CHANGES", notionPageId, diffs }) as { applied?: number; errors?: string[]; appliedIssueIds?: string[]; error?: string };
+      if (res?.error) {
+        setApplyResult({ applied: 0, errors: [res.error], appliedIssueIds: [] });
+      } else {
+        // Merge new appliedIssueIds with previously applied ones
+        const prev = applyResult?.appliedIssueIds ?? [];
+        const next = res?.appliedIssueIds ?? [];
+        setApplyResult({ applied: res?.applied ?? 0, errors: res?.errors ?? [], appliedIssueIds: [...prev, ...next] });
+      }
+    } catch (e) {
+      setApplyResult({ applied: 0, errors: [String(e)], appliedIssueIds: applyResult?.appliedIssueIds ?? [] });
+    }
+    setApplyState("done");
+    setTimeout(() => setApplyState("idle"), 3000);
   };
 
   const sortedIssues = [...result.issues].sort(
@@ -142,50 +182,90 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
 
       {tab === "suggestions" && (
         <>
-          {/* Copy Resolution Prompt — subtle, sits just below the tab */}
-          <div className="flex gap-1 relative" ref={dropdownRef}>
-            <button
-              onClick={handleCopyPrompt}
-              className="flex-1 flex items-center justify-center gap-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg px-4 py-2 hover:bg-gray-50 hover:text-gray-700 hover:border-gray-300 transition-colors"
-            >
-              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              {copied ? "Copied!" : "Copy Resolution Prompt"}
-            </button>
-            <button
-              onClick={() => setShowDownloadMenu((v) => !v)}
-              className="px-2.5 border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 hover:border-gray-300 rounded-lg transition-colors"
-              aria-label="More export options"
-            >
-              <svg
-                className={`w-4 h-4 transition-transform ${showDownloadMenu ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+          {/* Primary CTA: Apply Suggestions to Document + secondary dropdown */}
+          <div className="flex flex-col gap-1">
+            <div className="flex gap-1 relative" ref={dropdownRef}>
+              <button
+                onClick={handleApplyToDoc}
+                disabled={applyState === "applying"}
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+                {applyState === "applying"
+                  ? "Applying..."
+                  : applyState === "done"
+                  ? "Done ✓"
+                  : `Apply Suggestions to Document${pendingApplyCount > 0 ? ` (${pendingApplyCount})` : ""}`}
+              </button>
+              <button
+                onClick={() => setShowDownloadMenu((v) => !v)}
+                className="px-2.5 border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 hover:border-gray-300 rounded-lg transition-colors"
+                aria-label="More options"
+              >
+                <svg
+                  className={`w-4 h-4 transition-transform ${showDownloadMenu ? "rotate-180" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
 
-            {showDownloadMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[180px] overflow-hidden">
-                <button
-                  onClick={handleDownloadMarkdown}
-                  className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Download Report (.md)
-                </button>
-                <div className="border-t border-gray-100" />
-                <button
-                  onClick={handleDownloadJson}
-                  className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Download JSON
-                </button>
+              {showDownloadMenu && (
+                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[200px] overflow-hidden">
+                  <button
+                    onClick={handleCopyPrompt}
+                    className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    {copied ? "Copied!" : "Copy Resolution Prompt"}
+                  </button>
+                  <div className="border-t border-gray-100" />
+                  <button
+                    onClick={handleDownloadMarkdown}
+                    className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Download Report (.md)
+                  </button>
+                  <div className="border-t border-gray-100" />
+                  <button
+                    onClick={handleDownloadJson}
+                    className="w-full text-left text-xs px-4 py-2.5 text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Download JSON
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Status messages */}
+            {showAcceptHint && (
+              <p className="text-xs text-center text-gray-400">Accept suggestions to apply</p>
+            )}
+            {applyResult && (
+              <div className="flex flex-col gap-1">
+                <p className="text-xs text-center text-gray-500">
+                  {applyResult.applied} applied{applyResult.errors.length > 0 ? ` · ${applyResult.errors.length} failed` : ""}
+                </p>
+                {applyResult.errors.map((e, i) => (
+                  <p key={i} className="text-xs text-red-500 break-words">{e}</p>
+                ))}
               </div>
             )}
           </div>
+
+          {/* Accept All */}
+          {sortedIssues.some((i) => !appliedIds.has(i.id) && (!acceptedIds.has(i.id) || rejectedIds.has(i.id))) && (
+            <button
+              onClick={() => {
+                const ids = sortedIssues.filter((i) => !appliedIds.has(i.id)).map((i) => i.id);
+                setAcceptedIds((prev) => new Set([...prev, ...ids]));
+                setRejectedIds((prev) => { const s = new Set(prev); ids.forEach((id) => s.delete(id)); return s; });
+              }}
+              className="text-xs text-indigo-500 hover:text-indigo-700 self-end"
+            >
+              Accept all
+            </button>
+          )}
 
           <div className="flex flex-col gap-2">
             {sortedIssues.map((issue, idx) => (
@@ -193,9 +273,16 @@ export function ResultsPanel({ result, onReset, onIssueExpand: _onIssueExpand, o
                 key={issue.id}
                 issue={issue}
                 index={idx + 1}
-                accepted={acceptedIds.has(issue.id)}
-                onAccept={() => setAcceptedIds((prev) => new Set([...prev, issue.id]))}
-                onReject={() => setAcceptedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; })}
+                state={rejectedIds.has(issue.id) ? "rejected" : acceptedIds.has(issue.id) ? "accepted" : "pending"}
+                applied={appliedIds.has(issue.id)}
+                onAccept={() => {
+                  setAcceptedIds((prev) => new Set([...prev, issue.id]));
+                  setRejectedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; });
+                }}
+                onReject={() => {
+                  setRejectedIds((prev) => new Set([...prev, issue.id]));
+                  setAcceptedIds((prev) => { const s = new Set(prev); s.delete(issue.id); return s; });
+                }}
               />
             ))}
           </div>

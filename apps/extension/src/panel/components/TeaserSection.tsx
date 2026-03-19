@@ -21,7 +21,7 @@ export function TeaserSection() {
         </li>
       </ul>
       <a
-        href="https://alucify.com/beta"
+        href="https://www.alucify.ai/"
         target="_blank"
         rel="noreferrer"
         className="mt-3 inline-block text-xs font-medium text-brand-600 hover:underline"
