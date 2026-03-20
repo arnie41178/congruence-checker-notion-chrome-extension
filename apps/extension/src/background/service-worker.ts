@@ -17,8 +17,7 @@ const localJobs = new Map<string, LocalJobState>();
 const API_BASE = (self as unknown as { VITE_API_BASE?: string }).VITE_API_BASE
   ?? "http://localhost:3001";
 
-// Replaced at build time by Vite's define config (vite.config.ts)
-declare const VITE_NOTION_CLIENT_ID: string;
+const VITE_NOTION_CLIENT_ID = import.meta.env.VITE_NOTION_CLIENT_ID as string ?? "";
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -194,8 +193,33 @@ async function handleMessage(message: Record<string, unknown>) {
     }
 
     case "APPLY_CHANGES": {
-      const { notionPageId, diffs } = message as { type: string; notionPageId: string | null; diffs: Array<{ issueId: string; sectionTitle: string; before: string; after: string }> };
-      if (!notionPageId) return { applied: 0, errors: ["Notion page ID not detected. Navigate to your Notion page and re-detect it before applying changes."] };
+      const { notionPageId: msgPageId, diffs } = message as { type: string; notionPageId: string | null; diffs: Array<{ issueId: string; sectionTitle: string; before: string; after: string }> };
+      // If panel state didn't have the page ID, extract it fresh from the active tab URL
+      let notionPageId: string | null = msgPageId;
+      if (!notionPageId) {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const url = tabs[0]?.url ?? "";
+        const match =
+          url.match(/notion\.so[^?#]*\/[^?#]*-([0-9a-f]{32})(?:[?#]|$)/i) ??
+          url.match(/notion\.so[^?#]*\/([0-9a-f]{32})(?:[?#]|$)/i) ??
+          url.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+        notionPageId = match ? match[1] : null;
+      }
+      if (!notionPageId) return { applied: 0, errors: ["Notion page ID not detected. Navigate to your Notion page and re-detect it before applying changes."], appliedIssueIds: [] };
+
+      // Validate that the page ID is a standard Notion UUID (32 hex or hyphenated UUID)
+      const isValidNotionId = /^[0-9a-f]{32}$/i.test(notionPageId) ||
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(notionPageId);
+      if (!isValidNotionId) {
+        // Clear stale/invalid ID so re-detection picks up a fresh one
+        await chrome.storage.local.remove("currentNotionPageId");
+        return {
+          applied: 0,
+          errors: ["Notion page URL format is not supported. Please refresh your Notion page, click the green 'Notion Page Detected' button to re-detect, then try again."],
+          appliedIssueIds: [],
+        };
+      }
+
       let stored = await chrome.storage.local.get("alucify_notion_token");
       let token = stored.alucify_notion_token as string;
 
@@ -220,9 +244,16 @@ async function handleMessage(message: Record<string, unknown>) {
             await appendNotionBlock(token, parentId, diff.after, afterId);
           } else {
             const normalizedBefore = normalizeWS(diff.before);
-            const block = blocks.find((b) => normalizeWS(getNotionBlockText(b)).includes(normalizedBefore));
+            // Try full match first, then fall back to first 80 chars (handles multi-block text)
+            let block = blocks.find((b) => normalizeWS(getNotionBlockText(b)).includes(normalizedBefore));
+            const shortBefore = normalizedBefore.slice(0, 80);
+            if (!block && normalizedBefore.length > 80) {
+              block = blocks.find((b) => normalizeWS(getNotionBlockText(b)).includes(shortBefore));
+            }
             if (!block) { errors.push(`Text not found: "${diff.before.slice(0, 40)}..."`); continue; }
-            const newText = normalizeWS(getNotionBlockText(block)).replace(normalizedBefore, normalizeWS(diff.after));
+            const blockText = normalizeWS(getNotionBlockText(block));
+            const matchKey = blockText.includes(normalizedBefore) ? normalizedBefore : shortBefore;
+            const newText = blockText.replace(matchKey, normalizeWS(diff.after));
             await updateNotionBlock(token, block.id, block.type, newText);
           }
           applied++;
@@ -352,6 +383,10 @@ async function fetchAllNotionBlocks(token: string, blockId: string, parentId?: s
   const res = await fetch(`${NOTION_BASE}/blocks/${blockId}/children?page_size=100`, {
     headers: { Authorization: `Bearer ${token}`, "Notion-Version": NOTION_VERSION },
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { message?: string };
+    throw new Error(`Notion API error: ${err.message ?? res.statusText}`);
+  }
   const data = await res.json() as { results: NotionBlock[] };
   const blocks = (data.results ?? []).map((b) => ({ ...b, parentId: parentId ?? blockId }));
   const nested = await Promise.all(
@@ -366,7 +401,12 @@ function getNotionBlockText(block: NotionBlock): string {
 }
 
 function normalizeWS(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return text
+    .replace(/[\u2018\u2019\u02BC]/g, "'")   // smart single quotes → '
+    .replace(/[\u201C\u201D\u201E]/g, '"')   // smart double quotes → "
+    .replace(/[\u00A0\u2009\u202F]/g, " ")   // non-breaking/thin spaces → space
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function updateNotionBlock(token: string, blockId: string, blockType: string, newText: string) {
