@@ -98,5 +98,10 @@ export function useAnalysis() {
     setState(INITIAL);
   }, []);
 
-  return { state, startAnalysis, reset };
+  const loadResult = useCallback((result: AnalysisResult) => {
+    stopPolling();
+    setState({ ...INITIAL, phase: "results", result });
+  }, []);
+
+  return { state, startAnalysis, reset, loadResult };
 }

@@ -7,7 +7,14 @@
     "dev": "tsx watch --env-file .env src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test:auditor": "tsx --env-file .env src/scripts/test-auditor.ts",
+    "prep:auditor": "tsx src/scripts/prep-auditor.ts",
+    "phase1:prep":      "tsx src/scripts/phase1-prep.ts",
+    "phase1:consensus": "tsx src/scripts/phase1-consensus.ts",
+    "phase2:prep":      "tsx src/scripts/phase2-prep.ts",
+    "phase3:parse":     "tsx src/scripts/phase3-parse.ts",
+    "pipeline":         "tsx src/scripts/run-pipeline.ts"
   },
   "dependencies": {
     "@alucify/shared-types": "workspace:*",

@@ -3,6 +3,29 @@ import { initTelemetry, track } from "../lib/telemetry";
 import { runLocalPipeline } from "../lib/local-pipeline";
 import type { RepoContext } from "@alucify/shared-types";
 
+// ── Remote config cache ───────────────────────────────────────────────────────
+
+interface RemoteConfig {
+  analysisMethod: "pipeline" | "fast";
+  consensusRuns: number;
+}
+
+let cachedConfig: RemoteConfig | null = null;
+
+async function getRemoteConfig(): Promise<RemoteConfig> {
+  if (cachedConfig) return cachedConfig;
+  try {
+    const res = await fetch(`${API_BASE}/config`);
+    if (res.ok) {
+      cachedConfig = await res.json() as RemoteConfig;
+      return cachedConfig;
+    }
+  } catch {
+    // fall through to default
+  }
+  return { analysisMethod: "pipeline", consensusRuns: 5 };
+}
+
 // ── Local job store (in-memory, lives as long as SW is alive) ─────────────────
 interface LocalJobState {
   jobId: string;
@@ -118,6 +141,14 @@ async function handleMessage(message: Record<string, unknown>) {
         return { jobId };
       }
 
+      // Remote mode: route to pipeline or fast based on server config
+      const config = await getRemoteConfig();
+      if (config.analysisMethod === "pipeline") {
+        const jobId = await startPipelineJob(prdText, repo);
+        track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode: "pipeline" });
+        return { jobId };
+      }
+
       const jobId = await startAnalysis(clientId, notionPageId, prdText, repo);
       track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode: "remote" });
       return { jobId };
@@ -144,6 +175,11 @@ async function handleMessage(message: Record<string, unknown>) {
         });
       }
       return status;
+    }
+
+    case "GET_CONFIG": {
+      const config = await getRemoteConfig();
+      return config;
     }
 
     case "PANEL_OPENED": {
@@ -278,6 +314,20 @@ async function isFirstOpen(): Promise<boolean> {
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────────
+
+async function startPipelineJob(prdContent: string, repo?: RepoContext): Promise<string> {
+  const res = await fetch(`${API_BASE}/analysis/pipeline`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prdContent, repo }),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => res.statusText);
+    throw new Error(`Pipeline API error ${res.status}: ${err}`);
+  }
+  const data = (await res.json()) as { jobId: string };
+  return data.jobId;
+}
 
 async function startAnalysis(
   clientId: string,

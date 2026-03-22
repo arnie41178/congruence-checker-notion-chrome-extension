@@ -15,13 +15,12 @@ type AppStep = "onboarding" | "idle" | "repo_selection" | "selection_review" | "
 
 export default function App() {
   const { pageId, source, refresh: refreshPage } = useNotionPage();
-  const { state: analysis, startAnalysis, reset: resetAnalysis } = useAnalysis();
+  const { state: analysis, startAnalysis, reset: resetAnalysis, loadResult } = useAnalysis();
   const { state: repo, pickAndRead, useStoredRepo, clearSelection } = useRepoMemory(pageId);
   const { state: settings, save: saveSettings, saveNotionConnection, clearNotionConnection } = useSettings();
   const [step, setStep] = useState<AppStep>("idle");
   const [showSettings, setShowSettings] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<string>("");
-
   // Notify background when panel opens
   useEffect(() => {
     chrome.runtime.sendMessage({ type: "PANEL_OPENED" });
@@ -98,7 +97,6 @@ export default function App() {
   };
 
   const handleRun = () => {
-    // If repo already selected (suggestion available), go straight to confirm then run
     setStep("repo_selection");
   };
 
@@ -128,6 +126,23 @@ export default function App() {
       event: "issue_expanded",
       properties: { issueId, jobId: analysis.jobId },
     });
+  };
+
+  const handleLoadJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        if (!parsed.issues || !parsed.badge) throw new Error("Not a valid analysis-result.json");
+        loadResult(parsed);
+      } catch (err) {
+        alert(`Could not load results: ${String(err)}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   };
 
   const handleConnectNotion = async () => {
@@ -216,7 +231,20 @@ export default function App() {
         )}
 
         {step === "idle" && (
-          <RunCheckButton onClick={handleRun} disabled={!source} />
+          <div className="flex flex-col">
+            <RunCheckButton onClick={handleRun} disabled={!source} />
+            <div className="px-4 pb-4 flex justify-center">
+              <label className="text-xs text-gray-400 hover:text-gray-600 cursor-pointer transition-colors">
+                Load results JSON
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={handleLoadJson}
+                />
+              </label>
+            </div>
+          </div>
         )}
 
         {step === "repo_selection" && (
