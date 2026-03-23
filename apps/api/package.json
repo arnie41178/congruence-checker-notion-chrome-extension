@@ -13,10 +13,12 @@
     "phase1:prep":      "tsx src/scripts/phase1-prep.ts",
     "phase1:consensus": "tsx src/scripts/phase1-consensus.ts",
     "phase2:prep":      "tsx src/scripts/phase2-prep.ts",
+    "phase2:run":       "tsx src/scripts/phase2-run.ts",
     "phase2:audit":     "tsx src/scripts/phase2-audit.ts",
     "phase3:parse":     "tsx src/scripts/phase3-parse.ts",
     "phase4:fingerprint": "tsx src/scripts/phase4-fingerprint.ts",
     "phase4:compare":     "tsx src/scripts/compare-fingerprints.ts",
+    "phase4:compare-multi": "tsx src/scripts/compare-fingerprints-multi.ts",
     "pipeline":         "tsx src/scripts/run-pipeline.ts"
   },
   "dependencies": {
