@@ -1,4 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
+import { writeFile, mkdir } from "fs/promises";
+import { join } from "path";
 import { anthropic, MODEL } from "../lib/anthropic.js";
 import { createJob, updateJob } from "./job-store.js";
 import { buildRepoIndex } from "./repo-indexer.js";
@@ -78,6 +80,17 @@ async function runPipeline(jobId: string, request: AnalysisRequest) {
 
   // ── Stage 3: PRD Auditor agent (prd-auditor.md) ───────────────────────────
   await updateJob(jobId, { stage: 3, stageLabel: STAGE_LABELS[2] });
+
+  // Optionally save inputs as a fixture for prompt iteration testing
+  if (process.env.SAVE_DEV_FIXTURE === "true") {
+    const devDir = join(process.cwd(), ".dev");
+    await mkdir(devDir, { recursive: true });
+    await writeFile(
+      join(devDir, "last-fixture.json"),
+      JSON.stringify({ prdText, prdEntities, repoIndex, graphContext }, null, 2)
+    );
+    console.log("[Analysis] Saved dev fixture → .dev/last-fixture.json");
+  }
 
   const auditReport = await runPrdAudit(prdText, prdEntities, repoIndex, graphContext);
 

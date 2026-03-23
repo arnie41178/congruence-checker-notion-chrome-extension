@@ -118,6 +118,42 @@ export async function buildGraphContextFromRepo(
   }
 }
 
+/**
+ * Read graph context from an existing `.gitnexus/lbug` directory on disk.
+ * No gitnexus re-run needed — just queries the already-built index.
+ *
+ * @param repoRoot  Absolute path to the repo whose .gitnexus index to read.
+ *                  Defaults to process.cwd() (the apps/api directory's repo root).
+ */
+export async function buildGraphContextFromExistingIndex(
+  repoRoot?: string
+): Promise<string | null> {
+  const root = repoRoot ?? join(process.cwd(), "../..");
+  const dbPath = join(root, ".gitnexus", "lbug");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let conn: any = null;
+
+  try {
+    db = new lbug.Database(dbPath);
+    conn = new lbug.Connection(db);
+    const graph = await queryGraphData(conn as { query: (cypher: string) => Promise<unknown> });
+    const summary = buildGraphSummary(graph);
+    console.log(`[graph-context] Loaded existing index from ${dbPath} — ${summary.length} chars`);
+    return summary;
+  } catch (err) {
+    console.warn(`[graph-context] Could not read index at ${dbPath}:`, (err as Error).message);
+    return null;
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    await conn?.close();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    await db?.close();
+  }
+}
+
 // ── Ladybug DB queries ────────────────────────────────────────────────────────
 
 async function queryGraphData(conn: { query: (cypher: string) => Promise<unknown> }): Promise<GraphExport> {

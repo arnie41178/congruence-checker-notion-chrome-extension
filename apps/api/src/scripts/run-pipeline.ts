@@ -139,6 +139,7 @@ function runPhase1() {
 }
 
 function runPhase2() {
+  // Step 1: Prep — generate user-message files and system prompt
   banner("Phase 2 — Requirement Audit (prep)");
   const phase2PrepCmd = [
     "pnpm phase2:prep",
@@ -146,11 +147,15 @@ function runPhase2() {
     REPO_ROOT_ARG ? `--repo-root ${REPO_ROOT_ARG}` : "",
     REQ_ID_ARG ? `--req-id ${REQ_ID_ARG}` : "",
   ].filter(Boolean).join(" ");
-  const phase2Out = runCapture(phase2PrepCmd);
-  const claudeCmd = extractClaudeCommand(phase2Out, "Phase 2");
+  runLive(phase2PrepCmd);
 
-  banner("Phase 2 — Running Claude Haiku (per-requirement audit)");
-  runLive(claudeCmd);
+  // Step 2: Run — one isolated Claude session per requirement
+  banner("Phase 2 — Running Claude Haiku (isolated session per requirement)");
+  const phase2RunCmd = [
+    "pnpm phase2:run",
+    REQ_ID_ARG ? `--req-id ${REQ_ID_ARG}` : "",
+  ].filter(Boolean).join(" ");
+  runLive(phase2RunCmd);
 }
 
 function runPhase3() {

@@ -279,7 +279,7 @@ async function main() {
   console.log(``);
   console.log(`  Overall stability score:   ${overallStability}%  (avg presence across clusters)`);
   console.log(`  Consensus score:           ${consensusScore}%  (issues in every version)`);
-  console.log(`  Average match score:       ${avgMatchScore}%  (mean similarity of matched pairs)`);
+  console.log(`  Avg text similarity:       ${avgMatchScore}%  (mean text/fp similarity across matched pairs)`);
 
   banner("Issue Clusters  (sorted by stability)");
 

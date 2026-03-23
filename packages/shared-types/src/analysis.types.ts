@@ -1,3 +1,18 @@
+export interface Requirement {
+  id: string;           // "R001", "R002", ...
+  title: string;
+  description: string;
+  type: "functional" | "non-functional" | "constraint";
+  priority: "must-have" | "should-have" | "nice-to-have";
+  prd_excerpts?: string[];
+}
+
+export interface PrdRequirements {
+  version: number;
+  extractedAt: string;  // ISO timestamp
+  requirements: Requirement[];
+}
+
 export type IssueImpact = "critical" | "high" | "medium" | "low";
 export type ReadinessBadge = "not-ready" | "needs-work" | "mostly-ready" | "ready";
 

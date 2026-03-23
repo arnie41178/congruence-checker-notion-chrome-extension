@@ -9,13 +9,13 @@ import type { Issue, Scorecard, DiffHunk } from "@alucify/shared-types";
 const AGENT_FILE = join(process.cwd(), "src/agents/prd-auditor.md");
 
 // Strip YAML frontmatter (--- ... ---) and return the body as the system prompt
-async function loadAgentSystemPrompt(): Promise<string> {
+export async function loadAgentSystemPrompt(): Promise<string> {
   const raw = await readFile(AGENT_FILE, "utf-8");
   const match = raw.match(/^---[\s\S]*?---\n([\s\S]*)$/);
   return match ? match[1].trim() : raw.trim();
 }
 
-function buildAuditUserMessage(
+export function buildAuditUserMessage(
   prdText: string,
   prdEntities: PrdEntities,
   repoIndex: RepoIndex,
