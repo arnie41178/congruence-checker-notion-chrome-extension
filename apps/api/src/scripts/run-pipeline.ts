@@ -44,8 +44,8 @@ const PHASE = (() => {
   const idx = process.argv.indexOf("--phase");
   if (idx === -1) return null; // null = run all phases
   const n = parseInt(process.argv[idx + 1], 10);
-  if (![1, 2, 3].includes(n)) {
-    console.error("[Pipeline] --phase must be 1, 2, or 3");
+  if (![1, 2, 3, 4].includes(n)) {
+    console.error("[Pipeline] --phase must be 1, 2, 3, or 4");
     process.exit(1);
   }
   return n;
@@ -158,6 +158,11 @@ function runPhase3() {
   runLive("pnpm phase3:parse");
 }
 
+function runPhase4() {
+  banner("Phase 4 — Semantic Fingerprinting");
+  runLive("pnpm phase4:fingerprint");
+}
+
 // ── Print final requirements list ─────────────────────────────────────────────
 
 async function printRequirements() {
@@ -205,11 +210,13 @@ async function main() {
     if (PHASE === 1) runPhase1();
     if (PHASE === 2) runPhase2();
     if (PHASE === 3) runPhase3();
+    if (PHASE === 4) runPhase4();
   } else {
     console.log("[Pipeline] Starting full PRD audit pipeline...");
     runPhase1();
     runPhase2();
     runPhase3();
+    runPhase4();
   }
 
   // Always print the approved requirements list at the end

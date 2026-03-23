@@ -156,10 +156,10 @@ Examples:
 
 Output ONLY the structured block below — no preamble, no explanation, no extra text.
 
-If there are NO Critical or Major findings, set Status to `congruent` and write "None." for Gap and Suggestion, and omit the Diff.
+If there are NO Critical or Major findings, set Status to `implemented` and write "None." for Gap and Suggestion, and omit the Diff.
 
 ### Requirement {{ id }}: {{ title }}
-**Status**: congruent | needs-clarification | conflicting
+**Status**: implemented | partial | missing | conflicting
 **Evidence**: Specific files, routes, or symbols from the repository index that are relevant to this requirement. If nothing relevant found, say "No relevant code found in repository index."
 **Gap**: Concise description of what is ambiguous, conflicting, or missing — grouped by dimension where more than one applies (e.g. "Terminology: ...; Conflict: ..."). If Status is congruent, write "None."
 **Suggestion**: One sentence stating what specifically needs to be clarified or added in the PRD to resolve the gap. If Status is congruent, write "None."

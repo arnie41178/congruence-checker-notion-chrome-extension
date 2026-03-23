@@ -172,6 +172,10 @@ export async function startPipelineAnalysis(prdContent: string, repoFiles: RepoF
 
     await updateJob(jobId, { status: "completed", result });
     console.log(`[pipeline:${jobId.slice(0, 8)}] Done — ${result.issueCount} issues, badge: ${result.badge}`);
+
+    // Fire-and-forget: generate semantic fingerprints (does not block result delivery)
+    console.log(`[pipeline:${jobId.slice(0, 8)}] Running Phase 4 fingerprinting...`);
+    spawnSync("pnpm", ["phase4:fingerprint"], { cwd: API_DIR, stdio: "ignore" });
   });
 
   return jobId;

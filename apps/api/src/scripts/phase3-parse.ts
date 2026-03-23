@@ -164,7 +164,7 @@ function buildScorecard(audits: ParsedAudit[], total: number): Scorecard {
     }
     const summary = summaryParts.slice(0, 2).join(" ") ||
       (affected.length === 0
-        ? "No issues found in this category."
+        ? "No requirements flagged in this category."
         : `${affected.length} requirement(s) have findings in this category.`);
 
     // Suggestions: top 2–3 suggestion sentences from affected requirements
@@ -281,7 +281,7 @@ async function main() {
   console.log(`[Phase 3]   congruent:           ${statusCounts.congruent}`);
   console.log(`[Phase 3]   needs-clarification: ${statusCounts["needs-clarification"]}`);
   console.log(`[Phase 3]   conflicting:         ${statusCounts.conflicting}`);
-  console.log(`[Phase 3]   Issues:       ${issues.length}`);
+  console.log(`[Phase 3]   Requirements flagged: ${issues.length}`);
   console.log(`[Phase 3]   Badge:        ${badge}`);
   console.log(`[Phase 3]   Overall score: ${scorecard.overallScore}/10`);
   console.log(`[Phase 3]   Output:       apps/api/.dev/p3-${reqVersion}/analysis-result.json`);

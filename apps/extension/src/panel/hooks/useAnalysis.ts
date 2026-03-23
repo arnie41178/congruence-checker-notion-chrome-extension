@@ -21,8 +21,8 @@ const INITIAL: AnalysisState = {
   error: null,
 };
 
-const POLL_INTERVAL_MS = 1000;
-const MAX_POLLS = 600; // 10-minute timeout
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLLS = 2700; // 90-minute timeout (pipeline with 5 Opus runs takes 30-60 min)
 
 export function useAnalysis() {
   const [state, setState] = useState<AnalysisState>(INITIAL);
@@ -56,7 +56,7 @@ export function useAnalysis() {
       pollRef.current = setInterval(async () => {
         if (++pollCount > MAX_POLLS) {
           stopPolling();
-          setState((s) => ({ ...s, phase: "error", error: "Analysis timed out after 10 minutes." }));
+          setState((s) => ({ ...s, phase: "error", error: "Analysis timed out after 90 minutes." }));
           return;
         }
         try {

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { AnalysisResult, IssueImpact } from "@alucify/shared-types";
 import { SuggestionCard } from "./SuggestionCard";
-import { ScorecardPanel } from "./ScorecardPanel";
 import { downloadJson, downloadMarkdown } from "../../lib/download";
 import { formatMarkdownReport, formatResolutionPrompt } from "../../lib/report-formatter";
 
@@ -13,13 +12,14 @@ const IMPACT_ORDER: Record<IssueImpact, number> = {
 };
 
 const BADGE_CONFIG = {
-  "not-ready": { label: "Not Ready", color: "bg-red-100 text-red-700 border-red-300" },
-  "needs-work": { label: "Needs Work", color: "bg-orange-100 text-orange-700 border-orange-300" },
-  "mostly-ready": { label: "Mostly Ready", color: "bg-yellow-100 text-yellow-700 border-yellow-300" },
-  ready: { label: "Ready", color: "bg-green-100 text-green-700 border-green-300" },
+  "not-ready":    { label: "Draft",                 color: "bg-red-100 text-red-700 border-red-300",        dot: "bg-red-400" },
+  "needs-work":   { label: "Mostly Ready",           color: "bg-orange-100 text-orange-700 border-orange-300", dot: "bg-orange-400" },
+  "mostly-ready": { label: "Ready for Eng. Review",  color: "bg-blue-100 text-blue-700 border-blue-300",      dot: "bg-blue-500" },
+  "ready":        { label: "Agent Ready",            color: "bg-green-100 text-green-700 border-green-300",   dot: "bg-green-500" },
 };
 
-type Tab = "scorecard" | "suggestions";
+const BADGE_ORDER = ["not-ready", "needs-work", "mostly-ready", "ready"] as const;
+type BadgeKey = keyof typeof BADGE_CONFIG;
 
 interface Props {
   result: AnalysisResult;
@@ -30,10 +30,6 @@ interface Props {
 }
 
 export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _onIssueExpand, onResultsViewed }: Props) {
-  const hasScorecard = !!result.scorecard;
-  // Always default to Scorecard tab; fall back to suggestions if no scorecard
-  const [tab, setTab] = useState<Tab>("scorecard");
-
   const [acceptedIds, setAcceptedIds] = useState<Set<string>>(() => new Set<string>());
   const [rejectedIds, setRejectedIds] = useState<Set<string>>(() => new Set<string>());
 
@@ -42,12 +38,12 @@ export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _on
   const [applyState, setApplyState] = useState<"idle" | "applying" | "done">("idle");
   const [applyResult, setApplyResult] = useState<{ applied: number; errors: string[]; appliedIssueIds?: string[] } | null>(null);
   const [showAcceptHint, setShowAcceptHint] = useState(false);
+  const [showBadgePopup, setShowBadgePopup] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const badgePopupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     onResultsViewed();
-    // If no scorecard, start on suggestions
-    if (!hasScorecard) setTab("suggestions");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -62,6 +58,18 @@ export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _on
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showDownloadMenu]);
+
+  // Close badge popup when clicking outside
+  useEffect(() => {
+    if (!showBadgePopup) return;
+    const handler = (e: MouseEvent) => {
+      if (badgePopupRef.current && !badgePopupRef.current.contains(e.target as Node)) {
+        setShowBadgePopup(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showBadgePopup]);
 
   const badge = BADGE_CONFIG[result.badge];
   const fileSlug = `congruence-report-${result.jobId}`;
@@ -130,16 +138,60 @@ export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _on
   return (
     <div className="flex flex-col gap-4 p-4">
       {/* Summary card */}
-      <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+      <div className="flex items-center justify-between bg-indigo-600 rounded-xl px-5 py-4 shadow-md">
         <div>
-          <p className="text-sm font-semibold text-gray-800">
-            {result.issueCount} issue{result.issueCount !== 1 ? "s" : ""} detected
-          </p>
-          <p className="text-xs text-gray-400">Analysis complete</p>
+          <p className="text-base font-bold text-white">Readiness Score</p>
+          <p className="text-xs text-indigo-200 mt-0.5">Analysis complete</p>
         </div>
-        <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${badge.color}`}>
-          {badge.label}
-        </span>
+        <div className="relative" ref={badgePopupRef}>
+          <button
+            onClick={() => setShowBadgePopup((v) => !v)}
+            className={`text-sm font-bold px-4 py-1.5 rounded-full border transition-opacity hover:opacity-80 bg-white ${badge.color}`}
+          >
+            {badge.label}
+          </button>
+
+          {showBadgePopup && (
+            <div className="absolute right-0 top-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-20 p-4 w-72">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Spec Readiness</p>
+
+              {/* Subway track */}
+              <div className="relative flex items-start justify-between">
+                {/* Connecting line */}
+                <div className="absolute top-3 left-3 right-3 h-0.5 bg-gray-200" />
+                <div
+                  className="absolute top-3 left-3 h-0.5 bg-indigo-400 transition-all"
+                  style={{ width: `${(BADGE_ORDER.indexOf(result.badge as BadgeKey) / (BADGE_ORDER.length - 1)) * 100}%` }}
+                />
+
+                {BADGE_ORDER.map((key, idx) => {
+                  const cfg = BADGE_CONFIG[key];
+                  const currentIdx = BADGE_ORDER.indexOf(result.badge as BadgeKey);
+                  const isPast = idx < currentIdx;
+                  const isCurrent = idx === currentIdx;
+                  return (
+                    <div key={key} className="relative flex flex-col items-center gap-1.5 z-10" style={{ width: "25%" }}>
+                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
+                        isCurrent ? `${cfg.dot} border-transparent` :
+                        isPast    ? "bg-indigo-200 border-transparent" :
+                                    "bg-white border-gray-300"
+                      }`}>
+                        {(isCurrent || isPast) && (
+                          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </div>
+                      <p className={`text-center leading-tight ${isCurrent ? "text-gray-900 font-semibold" : "text-gray-400"}`} style={{ fontSize: "9px" }}>
+                        {cfg.label}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <button
@@ -149,46 +201,14 @@ export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _on
         Run another check
       </button>
 
-      {/* Tab switcher — prominent active state */}
-      <div className="flex gap-1 bg-gray-200 rounded-xl p-1">
-        {hasScorecard && (
-          <button
-            onClick={() => setTab("scorecard")}
-            className={`flex-1 text-xs font-semibold py-2 rounded-lg transition-all ${
-              tab === "scorecard"
-                ? "bg-blue-600 text-white shadow-sm"
-                : "text-gray-500 hover:text-gray-800"
-            }`}
-          >
-            Scorecard
-          </button>
-        )}
-        <button
-          onClick={() => setTab("suggestions")}
-          className={`flex-1 text-xs font-semibold py-2 rounded-lg transition-all ${
-            tab === "suggestions"
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-gray-500 hover:text-gray-800"
-          }`}
-        >
-          Suggestions
-        </button>
-      </div>
-
-      {/* Tab content */}
-      {tab === "scorecard" && result.scorecard && (
-        <ScorecardPanel scorecard={result.scorecard} />
-      )}
-
-      {tab === "suggestions" && (
-        <>
+      <>
           {/* Primary CTA: Apply Suggestions to Document + secondary dropdown */}
           <div className="flex flex-col gap-1">
             <div className="flex gap-1 relative" ref={dropdownRef}>
               <button
                 onClick={handleApplyToDoc}
                 disabled={applyState === "applying"}
-                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50"
+                className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold text-indigo-600 bg-white border border-indigo-300 hover:bg-indigo-50 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50"
               >
                 {applyState === "applying"
                   ? "Applying..."
@@ -286,8 +306,7 @@ export function ResultsPanel({ result, notionPageId, onReset, onIssueExpand: _on
               />
             ))}
           </div>
-        </>
-      )}
+      </>
 
     </div>
   );

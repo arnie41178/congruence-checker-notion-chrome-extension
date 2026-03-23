@@ -68,7 +68,7 @@ export function SuggestionCard({ issue, index, state, applied, onAccept, onRejec
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <p className={`text-xs font-semibold leading-snug ${isRejected ? "line-through text-gray-400" : "text-gray-800"}`}>
-              Issue {index}: {issue.summary}
+              Requirement {index}: {issue.summary}
             </p>
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 uppercase ${impactColor}`}>
               {issue.impact}

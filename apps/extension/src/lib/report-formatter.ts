@@ -59,7 +59,7 @@ export function formatMarkdownReport(result: AnalysisResult): string {
   lines.push("# Congruence Report");
   lines.push("");
   lines.push(`**Readiness:** ${BADGE_LABEL[result.badge] ?? result.badge}`);
-  lines.push(`**Issues found:** ${result.issueCount}`);
+  lines.push(`**Requirements flagged:** ${result.issueCount}`);
   lines.push(`**Analyzed at:** ${result.analyzedAt}`);
   lines.push(`**Job ID:** ${result.jobId}`);
   lines.push("");
@@ -67,13 +67,13 @@ export function formatMarkdownReport(result: AnalysisResult): string {
   lines.push("");
 
   if (result.issues.length === 0) {
-    lines.push("No issues detected.");
+    lines.push("No requirements flagged.");
     return lines.join("\n");
   }
 
   result.issues.forEach((issue, i) => {
     const status = issue.accepted === false ? "❌ Rejected" : "✅ Accepted";
-    lines.push(`## Issue ${i + 1} — ${issue.summary} [${issue.impact.toUpperCase()}] ${status}`);
+    lines.push(`## Requirement ${i + 1} — ${issue.summary} [${issue.impact.toUpperCase()}] ${status}`);
     lines.push("");
     if (issue.affectedArea) {
       lines.push(`**Affected Area:** ${issue.affectedArea}`);
@@ -82,7 +82,7 @@ export function formatMarkdownReport(result: AnalysisResult): string {
     lines.push(`**Description:** ${issue.description}`);
     lines.push("");
     if (issue.evidence) {
-      lines.push(`**Evidence:** ${issue.evidence}`);
+      lines.push(`**Relevant Code Elements:** ${issue.evidence}`);
       lines.push("");
     }
     if (issue.suggestion) {
