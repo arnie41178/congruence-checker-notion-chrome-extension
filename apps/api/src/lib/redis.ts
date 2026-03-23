@@ -5,5 +5,5 @@ export const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
-export const JOB_TTL_SECONDS = 60 * 60; // 1 hour
+export const JOB_TTL_SECONDS = 6 * 60 * 60; // 6 hours
 export const DAILY_LIMIT = 100; // max analyses per clientId per day

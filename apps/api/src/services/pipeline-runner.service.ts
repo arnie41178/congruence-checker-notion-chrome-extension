@@ -33,7 +33,12 @@ function detectStage(line: string): StageInfo | null {
   if (line.includes("[Phase 1]")) {
     return { stage: 1, stageLabel: "Phase 1 — Extracting requirements…" };
   }
-  if (line.includes("[Phase 2]")) {
+  // Match both "[Phase 2]" (prep) and "[Phase 2 Run] Auditing RXXX" to keep TTL alive during long audits
+  const p2RunMatch = line.match(/\[Phase 2 Run\] Auditing (R\d+)/);
+  if (p2RunMatch) {
+    return { stage: 2, stageLabel: `Phase 2 — Auditing ${p2RunMatch[1]}…` };
+  }
+  if (line.includes("[Phase 2]") || line.includes("[Phase 2 Run]")) {
     return { stage: 2, stageLabel: "Phase 2 — Auditing requirements…" };
   }
   if (line.includes("[Phase 3]")) {
@@ -173,9 +178,17 @@ export async function startPipelineAnalysis(prdContent: string, repoFiles: RepoF
     await updateJob(jobId, { status: "completed", result });
     console.log(`[pipeline:${jobId.slice(0, 8)}] Done — ${result.issueCount} issues, badge: ${result.badge}`);
 
-    // Fire-and-forget: generate semantic fingerprints (does not block result delivery)
+    // Fire-and-forget: generate semantic fingerprints — use spawn (async) so the
+    // event loop is never blocked and the frontend can still poll for results.
     console.log(`[pipeline:${jobId.slice(0, 8)}] Running Phase 4 fingerprinting...`);
-    spawnSync("pnpm", ["phase4:fingerprint"], { cwd: API_DIR, stdio: "ignore" });
+    const p4 = spawn("pnpm", ["phase4:fingerprint"], { cwd: API_DIR, stdio: "ignore" });
+    p4.on("close", (p4Code) => {
+      if (p4Code !== 0) {
+        console.warn(`[pipeline:${jobId.slice(0, 8)}] Phase 4 fingerprinting exited with code ${p4Code}`);
+      } else {
+        console.log(`[pipeline:${jobId.slice(0, 8)}] Phase 4 fingerprinting complete`);
+      }
+    });
   });
 
   return jobId;

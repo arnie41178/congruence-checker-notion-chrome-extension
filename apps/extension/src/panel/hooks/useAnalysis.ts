@@ -65,9 +65,9 @@ export function useAnalysis() {
             jobId,
           }) as JobState;
 
-          if (!job.status) {
-            stopPolling();
-            setState((s) => ({ ...s, phase: "error", error: "Job not found. It may have expired." }));
+          if (!job || !job.status) {
+            // Service worker may have been restarted by Chrome mid-poll — skip this tick
+            console.warn("[Alucify] Poll returned empty job — service worker may have restarted, retrying…");
             return;
           }
           if (job.status === "running") {

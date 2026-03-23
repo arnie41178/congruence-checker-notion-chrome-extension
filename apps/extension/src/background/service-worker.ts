@@ -413,6 +413,11 @@ async function pollJob(clientId: string, jobId: string) {
   const res = await fetch(`${API_BASE}/analysis/${jobId}`, {
     headers: { "X-Client-ID": clientId },
   });
+  if (!res.ok) {
+    // Return a JobState-shaped object so the frontend's !job.status check
+    // doesn't misfire — let the frontend handle the error explicitly
+    return { status: "failed", message: res.status === 404 ? "Job not found or expired." : `Server error ${res.status}` };
+  }
   return res.json();
 }
 

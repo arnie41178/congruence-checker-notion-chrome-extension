@@ -5,24 +5,36 @@
  * consistently each issue appears. Each cluster anchors on the earliest
  * version's entry so matching doesn't drift as versions accumulate.
  *
- * Matching uses the same combined score as compare-fingerprints.ts:
- *   0.25 × fingerprint token Jaccard
- *   0.75 × summary text Jaccard  (slash-split, plural-normalized, stopwords)
- *   + 0.10 domain bonus, +0.15 subject bonus (≥0.70 Jaccard), +0.10 defect bonus
+ * Two matching modes (select with --llm flag):
+ *
+ *   Token mode (default):
+ *     0.25 × fingerprint token Jaccard
+ *     0.75 × summary text Jaccard  (slash-split, plural-normalized, stopwords)
+ *     + 0.10 domain bonus, +0.15 subject bonus (≥0.70 Jaccard), +0.10 defect bonus
+ *
+ *   LLM mode (--llm):
+ *     One Claude Haiku call per version — all cluster anchors + all version
+ *     entries sent in a single batch. LLM returns per-candidate anchor
+ *     assignment with confidence score. Same greedy assignment logic applied.
  *
  * Usage:
- *   cd apps/api && pnpm phase4:compare-multi                     # auto-detect latest 5 versions
+ *   cd apps/api && pnpm phase4:compare-multi                     # token mode, latest 5
  *   cd apps/api && pnpm phase4:compare-multi --latest 10         # auto-detect latest N
  *   cd apps/api && pnpm phase4:compare-multi --versions v020,v021,v022,v023,v024
- *   cd apps/api && pnpm phase4:compare-multi --threshold 0.55    # override similarity threshold
+ *   cd apps/api && pnpm phase4:compare-multi --threshold 0.55    # override threshold
+ *   cd apps/api && pnpm phase4:compare-multi --llm               # LLM-based matching
+ *   cd apps/api && pnpm phase4:compare-multi --llm --latest 10   # LLM, latest 10
  */
 
-import { readFile, readdir } from "fs/promises";
+import { readFile, readdir, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { spawnSync } from "child_process";
 
 const DEV_DIR = join(process.cwd(), ".dev");
+const LLM_TMP_DIR = join(DEV_DIR, "llm-match-tmp");
 const DEFAULT_THRESHOLD = 0.55;
 const DEFAULT_LATEST = 5;
+const LLM_MODEL = "claude-haiku-4-5-20251001";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,9 +56,9 @@ interface Cluster {
   anchor: FingerprintEntry;
   /** Map of version → the matched entry in that version. */
   versions: Map<string, FingerprintEntry>;
-  /** Sum of combinedScore values for all non-anchor matches. */
+  /** Sum of match scores for all non-anchor members (token similarity or LLM confidence). */
   scoreSum: number;
-  /** Number of non-anchor matches (= versions.size - 1 once anchor is seeded). */
+  /** Number of non-anchor matches. */
   scoreCount: number;
 }
 
@@ -57,7 +69,9 @@ function getArg(flag: string): string | null {
   return idx !== -1 ? (process.argv[idx + 1] ?? null) : null;
 }
 
-// ── Similarity helpers (shared with compare-fingerprints.ts) ─────────────────
+const USE_LLM = process.argv.includes("--llm");
+
+// ── Token-based similarity helpers ───────────────────────────────────────────
 
 const SUMMARY_STOPWORDS = new Set([
   "a", "an", "the", "and", "or", "of", "for", "with", "in", "on", "to",
@@ -101,6 +115,328 @@ function combinedScore(e1: FingerprintEntry, e2: FingerprintEntry): number {
   return Math.min(1, 0.25 * fpScore + 0.75 * summaryScore + segmentBonuses(e1.fingerprint, e2.fingerprint));
 }
 
+// ── LLM matching ──────────────────────────────────────────────────────────────
+
+const LLM_SYSTEM_PROMPT = `You are a semantic deduplication engine for PRD audit issues.
+
+You will be given:
+  - anchors:    a list of existing issue clusters, each identified by a cluster_id, fingerprint, and summary
+  - candidates: a list of new issue entries from a single pipeline run
+
+Your task: for each CANDIDATE, decide if it represents the same underlying PRD gap
+as any ANCHOR — even if the wording, domain label, subject, or defect type differs.
+
+---
+
+## What "same issue" means
+
+Two entries represent the same issue if they describe the same gap or ambiguity in
+the PRD, regardless of:
+  - Surface wording differences in the summary
+  - Minor domain relabelling  (e.g. "testing" vs "test", "quota" vs "rotation")
+  - Subject phrasing variation (e.g. "state-file" vs "state-tracking")
+  - Aspect phrasing variation  (e.g. "path" vs "file-path")
+  - Defect type drift when the root problem is the same
+    (e.g. "ambiguous" vs "missing" when the PRD is simply underspecified)
+
+Two entries are DIFFERENT issues if they describe meaningfully distinct gaps —
+different features, different failure modes, or different actors — even if some
+tokens overlap.
+
+---
+
+## Few-shot examples  (confirmed MATCH pairs)
+
+Pair A:
+  Anchor:    quota.state-file.path.conflict
+             "The PRD conflicts on where the quota state file path is stored"
+  Candidate: quota.state-tracking.file-path.conflict
+             "Conflicting specifications for the quota state tracking file path"
+  → MATCH — same conflict about quota state file location; subject tokens differ
+    ("state-file" vs "state-tracking") but domain, defect, and summary intent align.
+
+Pair B:
+  Anchor:    testing.tests.scope.missing
+             "The scope of tests required for account quota changes is not defined"
+  Candidate: test.account-quota.definition.missing
+             "No definition provided for what tests are needed around account quota"
+  → MATCH — both flag the missing test definition for account quota; domain differs
+    ("testing" vs "test") and subject differs but the meaning is identical.
+
+Pair C:
+  Anchor:    quota.quota-rotation.specification.ambiguous
+             "The specification for quota rotation behaviour is ambiguous"
+  Candidate: quota.rotation.atomicity.missing
+             "The atomicity requirements for quota rotation are not specified"
+  → MATCH — both describe an underspecified quota rotation behaviour; defect type
+    differs ("ambiguous" vs "missing") but the root gap is the same.
+
+Pair D:
+  Anchor:    account.activation-levels.determination.missing
+             "How activation levels are determined for accounts is not specified"
+  Candidate: quota.activation-levels.priority.conflict
+             "Priority ordering for activation levels across quota tiers is conflicting"
+  → MATCH — both flag an issue with activation-level rules; domain and defect differ
+    but the subject "activation-levels" is identical and summaries share the same area.
+
+Pair E:
+  Anchor:    account.registry.specification.ambiguous
+             "The account registry specification is ambiguous"
+  Candidate: account.cli-command.naming.conflict
+             "CLI command naming for account registry operations conflicts with existing conventions"
+  → MATCH — both describe an underspecified/conflicting account registry definition;
+    subject tokens differ but domain and summary intent align.
+
+Pair F:
+  Anchor:    quota.automatic-rotation.behavior.missing
+             "Controller integration for automated quota monitoring"
+  Candidate: rotation.automatic-execution.behavior.ambiguous
+             "Controller integration for automated rotation"
+  → MATCH — both describe a missing/underspecified controller integration for
+    automated rotation behaviour; domain, subject, and defect all differ, but
+    the summary meaning is identical.
+
+---
+
+## Output format
+
+Return ONLY this JSON object — no preamble, no explanation outside the JSON:
+
+{
+  "assignments": [
+    {
+      "candidate_id":      "<the candidate's id field>",
+      "candidate_version": "<the candidate's version field>",
+      "anchor_id":         "<the matching cluster_id, or null if no match>",
+      "confidence":        0.0–1.0,
+      "reasoning":         "<one sentence>"
+    }
+  ]
+}
+
+Rules:
+  - Every candidate must appear exactly once in the assignments array
+  - Set anchor_id to null if no anchor matches with confidence ≥ 0.6
+  - A candidate may only match ONE anchor (pick the best one)
+  - Do not match entries that share only a single token coincidentally
+  - Do not match entries that describe genuinely different PRD gaps`;
+
+interface LLMAssignment {
+  candidate_id: string;
+  candidate_version: string;
+  anchor_id: string | null;
+  confidence: number;
+  reasoning: string;
+}
+
+async function writeLLMFiles(userMessage: string): Promise<{ sysPath: string; userPath: string }> {
+  await mkdir(LLM_TMP_DIR, { recursive: true });
+  const sysPath  = join(LLM_TMP_DIR, "system-prompt.md");
+  const userPath = join(LLM_TMP_DIR, "user-message.md");
+  await writeFile(sysPath, LLM_SYSTEM_PROMPT, "utf-8");
+  await writeFile(userPath, userMessage, "utf-8");
+  return { sysPath, userPath };
+}
+
+function callLLMMatch(
+  anchors:    Array<{ cluster_id: string; fingerprint: string; summary: string }>,
+  candidates: Array<{ id: string; version: string; fingerprint: string; summary: string }>,
+  sysRelPath:  string,
+  userRelPath: string,
+): LLMAssignment[] {
+  const userMessage = [
+    "Below are the ANCHORS and CANDIDATES.",
+    "For each candidate, identify which anchor (if any) represents the same PRD issue.",
+    "",
+    "```json",
+    JSON.stringify({ anchors, candidates }, null, 2),
+    "```",
+  ].join("\n");
+
+  // Overwrite user-message file synchronously is not possible — caller must have written it already.
+  // We pass relative paths so Claude can read them from the repo root.
+  const prompt =
+    `Read the system prompt at ${sysRelPath} and apply it as your instructions. ` +
+    `Then process the batch input at ${userRelPath}. ` +
+    `Return ONLY the JSON object with the assignments array — no preamble, no explanation.`;
+
+  const result = spawnSync(
+    "claude",
+    ["--print", "--dangerously-skip-permissions", "--model", LLM_MODEL, prompt],
+    { encoding: "utf-8", stdio: ["inherit", "pipe", "inherit"] },
+  );
+
+  if (result.status !== 0) {
+    console.warn(`[compare-multi] WARNING: LLM call failed (exit ${result.status}) — falling back to token similarity for this version`);
+    return [];
+  }
+
+  const raw = result.stdout ?? "";
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    console.warn(`[compare-multi] WARNING: Could not parse LLM JSON response — falling back to token similarity`);
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return (parsed.assignments ?? []) as LLMAssignment[];
+  } catch {
+    console.warn(`[compare-multi] WARNING: JSON parse error in LLM response — falling back to token similarity`);
+    return [];
+  }
+  void userMessage; // built above for context; actual content written by caller
+}
+
+// ── Greedy assignment (shared by both modes) ──────────────────────────────────
+
+function applyGreedyAssignment(
+  entries: FingerprintEntry[],
+  clusters: Cluster[],
+  version: string,
+  scoredCandidates: { entryIdx: number; clusterIdx: number; score: number }[],
+) {
+  scoredCandidates.sort((a, b) => b.score - a.score);
+  const usedEntries  = new Set<number>();
+  const usedClusters = new Set<number>();
+
+  for (const { entryIdx, clusterIdx, score } of scoredCandidates) {
+    if (usedEntries.has(entryIdx) || usedClusters.has(clusterIdx)) continue;
+    usedEntries.add(entryIdx);
+    usedClusters.add(clusterIdx);
+    clusters[clusterIdx].versions.set(version, entries[entryIdx]);
+    clusters[clusterIdx].scoreSum   += score;
+    clusters[clusterIdx].scoreCount += 1;
+  }
+
+  // Unmatched entries → new clusters
+  for (let ei = 0; ei < entries.length; ei++) {
+    if (usedEntries.has(ei)) continue;
+    clusters.push({
+      anchor: entries[ei],
+      versions: new Map([[version, entries[ei]]]),
+      scoreSum: 0,
+      scoreCount: 0,
+    });
+  }
+}
+
+// ── Token-based clustering ────────────────────────────────────────────────────
+
+function buildClusters(
+  versionedEntries: { version: string; entry: FingerprintEntry }[],
+  threshold: number,
+): Cluster[] {
+  const clusters: Cluster[] = [];
+  const versions = [...new Set(versionedEntries.map((e) => e.version))];
+
+  for (const version of versions) {
+    const entries = versionedEntries.filter((e) => e.version === version).map((e) => e.entry);
+
+    const scored: { entryIdx: number; clusterIdx: number; score: number }[] = [];
+    for (let ei = 0; ei < entries.length; ei++) {
+      for (let ci = 0; ci < clusters.length; ci++) {
+        if (clusters[ci].versions.has(version)) continue;
+        const score = combinedScore(entries[ei], clusters[ci].anchor);
+        if (score >= threshold) scored.push({ entryIdx: ei, clusterIdx: ci, score });
+      }
+    }
+
+    applyGreedyAssignment(entries, clusters, version, scored);
+  }
+
+  return clusters;
+}
+
+// ── LLM-based clustering ──────────────────────────────────────────────────────
+
+async function buildClustersLLM(
+  versionedEntries: { version: string; entry: FingerprintEntry }[],
+  threshold: number,
+): Promise<Cluster[]> {
+  const clusters: Cluster[] = [];
+  const versions = [...new Set(versionedEntries.map((e) => e.version))];
+
+  // Write system prompt once
+  const { sysPath, userPath } = await writeLLMFiles("");
+  const sysRelPath  = `apps/api/.dev/llm-match-tmp/system-prompt.md`;
+  const userRelPath = `apps/api/.dev/llm-match-tmp/user-message.md`;
+
+  for (const version of versions) {
+    const entries = versionedEntries.filter((e) => e.version === version).map((e) => e.entry);
+
+    // First version — all entries seed new clusters
+    if (clusters.length === 0) {
+      for (const entry of entries) {
+        clusters.push({ anchor: entry, versions: new Map([[version, entry]]), scoreSum: 0, scoreCount: 0 });
+      }
+      continue;
+    }
+
+    // Build anchor list: clusters that don't already have this version
+    const availableClusters = clusters
+      .map((c, idx) => ({ cluster_id: String(idx), fingerprint: c.anchor.fingerprint, summary: c.anchor.summary }))
+      .filter((_, idx) => !clusters[idx].versions.has(version));
+
+    if (availableClusters.length === 0) {
+      for (const entry of entries) {
+        clusters.push({ anchor: entry, versions: new Map([[version, entry]]), scoreSum: 0, scoreCount: 0 });
+      }
+      continue;
+    }
+
+    const candidateInputs = entries.map((e) => ({
+      id: e.id,
+      version,
+      fingerprint: e.fingerprint,
+      summary: e.summary,
+    }));
+
+    // Write user message for this version
+    const userMessage = [
+      "Below are the ANCHORS and CANDIDATES.",
+      "For each candidate, identify which anchor (if any) represents the same PRD issue.",
+      "",
+      "```json",
+      JSON.stringify({ anchors: availableClusters, candidates: candidateInputs }, null, 2),
+      "```",
+    ].join("\n");
+    await writeFile(userPath, userMessage, "utf-8");
+
+    console.log(`[compare-multi] LLM matching ${entries.length} entries against ${availableClusters.length} clusters for ${version}...`);
+    const assignments = callLLMMatch(availableClusters, candidateInputs, sysRelPath, userRelPath);
+
+    // If LLM call failed entirely, fall back to token similarity for this version
+    if (assignments.length === 0) {
+      const scored: { entryIdx: number; clusterIdx: number; score: number }[] = [];
+      for (let ei = 0; ei < entries.length; ei++) {
+        for (let ci = 0; ci < clusters.length; ci++) {
+          if (clusters[ci].versions.has(version)) continue;
+          const score = combinedScore(entries[ei], clusters[ci].anchor);
+          if (score >= threshold) scored.push({ entryIdx: ei, clusterIdx: ci, score });
+        }
+      }
+      applyGreedyAssignment(entries, clusters, version, scored);
+      continue;
+    }
+
+    // Convert LLM assignments to scored candidates
+    const scored: { entryIdx: number; clusterIdx: number; score: number }[] = [];
+    for (const assignment of assignments) {
+      if (!assignment.anchor_id || assignment.confidence < threshold) continue;
+      const entryIdx   = entries.findIndex((e) => e.id === assignment.candidate_id);
+      const clusterIdx = parseInt(assignment.anchor_id, 10);
+      if (entryIdx === -1 || isNaN(clusterIdx) || clusterIdx >= clusters.length) continue;
+      scored.push({ entryIdx, clusterIdx, score: assignment.confidence });
+    }
+
+    applyGreedyAssignment(entries, clusters, version, scored);
+  }
+
+  void sysPath; // written at setup; not used directly after that
+  return clusters;
+}
+
 // ── Version detection ─────────────────────────────────────────────────────────
 
 async function detectVersions(latest: number): Promise<string[]> {
@@ -127,68 +463,6 @@ async function loadFingerprints(version: string): Promise<FingerprintsFile> {
   }
 }
 
-// ── Multi-version clustering ──────────────────────────────────────────────────
-
-/**
- * Build issue clusters across all versions.
- *
- * Strategy: iterate versions in order. For each entry, find the best-scoring
- * existing cluster (matched against its anchor) above threshold. If none found,
- * start a new cluster. Each cluster accepts at most one entry per version
- * (greedy best-match within each version).
- */
-function buildClusters(
-  versionedEntries: { version: string; entry: FingerprintEntry }[],
-  threshold: number,
-): Cluster[] {
-  const clusters: Cluster[] = [];
-
-  // Process one version at a time, greedily assigning each entry to a cluster
-  const versions = [...new Set(versionedEntries.map((e) => e.version))];
-
-  for (const version of versions) {
-    const entries = versionedEntries.filter((e) => e.version === version).map((e) => e.entry);
-
-    // Score every entry against every cluster's anchor (that doesn't already have this version)
-    const candidates: { entryIdx: number; clusterIdx: number; score: number }[] = [];
-    for (let ei = 0; ei < entries.length; ei++) {
-      for (let ci = 0; ci < clusters.length; ci++) {
-        if (clusters[ci].versions.has(version)) continue; // version slot taken
-        const score = combinedScore(entries[ei], clusters[ci].anchor);
-        if (score >= threshold) candidates.push({ entryIdx: ei, clusterIdx: ci, score });
-      }
-    }
-
-    // Greedy assignment — highest score first, each entry and cluster slot used once
-    candidates.sort((a, b) => b.score - a.score);
-    const usedEntries = new Set<number>();
-    const usedClusters = new Set<number>();
-
-    for (const { entryIdx, clusterIdx, score } of candidates) {
-      if (usedEntries.has(entryIdx) || usedClusters.has(clusterIdx)) continue;
-      usedEntries.add(entryIdx);
-      usedClusters.add(clusterIdx);
-      const cluster = clusters[clusterIdx];
-      cluster.versions.set(version, entries[entryIdx]);
-      cluster.scoreSum += score;
-      cluster.scoreCount += 1;
-    }
-
-    // Unmatched entries → new clusters
-    for (let ei = 0; ei < entries.length; ei++) {
-      if (usedEntries.has(ei)) continue;
-      clusters.push({
-        anchor: entries[ei],
-        versions: new Map([[version, entries[ei]]]),
-        scoreSum: 0,
-        scoreCount: 0,
-      });
-    }
-  }
-
-  return clusters;
-}
-
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 function banner(label: string) {
@@ -212,7 +486,7 @@ async function main() {
   const thresholdArg = getArg("--threshold");
   const threshold = thresholdArg ? parseFloat(thresholdArg) : DEFAULT_THRESHOLD;
 
-  const latestArg = getArg("--latest");
+  const latestArg   = getArg("--latest");
   const versionsArg = getArg("--versions");
 
   let versions: string[];
@@ -228,45 +502,43 @@ async function main() {
     console.log(`[compare-multi] Auto-detected ${versions.length} versions: ${versions.join(" → ")}`);
   }
 
-  console.log(`[compare-multi] Similarity threshold: ${pct(threshold)}`);
+  const matchMode = USE_LLM ? "LLM (Claude Haiku)" : "token similarity";
+  console.log(`[compare-multi] Match mode:  ${matchMode}`);
+  console.log(`[compare-multi] Threshold:   ${pct(threshold)}`);
 
-  // Load all fingerprint files
   const files = await Promise.all(versions.map((v) => loadFingerprints(v)));
 
-  // Flatten to (version, entry) pairs, preserving version order
   const versionedEntries = files.flatMap((f) =>
     f.fingerprints.map((entry) => ({ version: f.version, entry })),
   );
 
   const totalEntries = files.reduce((n, f) => n + f.fingerprints.length, 0);
-  const clusters = buildClusters(versionedEntries, threshold);
+  const clusters = USE_LLM
+    ? await buildClustersLLM(versionedEntries, threshold)
+    : buildClusters(versionedEntries, threshold);
 
-  // Sort clusters: most stable first, then by anchor fingerprint
+  // Sort: most stable first, then alphabetically by fingerprint
   clusters.sort((a, b) => {
     const diff = b.versions.size - a.versions.size;
     return diff !== 0 ? diff : a.anchor.fingerprint.localeCompare(b.anchor.fingerprint);
   });
 
   const N = versions.length;
-  const fullStable   = clusters.filter((c) => c.versions.size === N).length;
-  const mostStable   = clusters.filter((c) => c.versions.size >= Math.ceil(N * 0.7) && c.versions.size < N).length;
-  const unstable     = clusters.filter((c) => c.versions.size < Math.ceil(N * 0.5)).length;
-  const partStable   = clusters.length - fullStable - mostStable - unstable;
+  const fullStable = clusters.filter((c) => c.versions.size === N).length;
+  const mostStable = clusters.filter((c) => c.versions.size >= Math.ceil(N * 0.7) && c.versions.size < N).length;
+  const unstable   = clusters.filter((c) => c.versions.size < Math.ceil(N * 0.5)).length;
+  const partStable = clusters.length - fullStable - mostStable - unstable;
 
-  // Overall stability: weighted by presence across versions
-  const totalPresence = clusters.reduce((sum, c) => sum + c.versions.size, 0);
-  const maxPresence = clusters.length * N;
+  const totalPresence  = clusters.reduce((sum, c) => sum + c.versions.size, 0);
+  const maxPresence    = clusters.length * N;
   const overallStability = maxPresence === 0 ? 100 : Math.round((totalPresence / maxPresence) * 100);
+  const consensusScore   = clusters.length === 0 ? 100 : Math.round((fullStable / clusters.length) * 100);
 
-  // Consensus score: fraction of clusters present in every version
-  const consensusScore = clusters.length === 0 ? 100 : Math.round((fullStable / clusters.length) * 100);
-
-  // Average match score: mean combinedScore across all cross-version matches
   const globalScoreSum   = clusters.reduce((s, c) => s + c.scoreSum, 0);
   const globalScoreCount = clusters.reduce((s, c) => s + c.scoreCount, 0);
-  const avgMatchScore = globalScoreCount === 0 ? 100 : Math.round((globalScoreSum / globalScoreCount) * 100);
+  const avgTextSimilarity = globalScoreCount === 0 ? 100 : Math.round((globalScoreSum / globalScoreCount) * 100);
 
-  banner(`Multi-Version Stability Report  (${N} versions)`);
+  banner(`Multi-Version Stability Report  (${N} versions)  [${matchMode}]`);
   console.log(`  Versions:     ${versions.join("  →  ")}`);
   console.log(`  Threshold:    ${pct(threshold)}`);
   console.log(`  Total entries loaded:  ${totalEntries}  (across all versions)`);
@@ -279,7 +551,7 @@ async function main() {
   console.log(``);
   console.log(`  Overall stability score:   ${overallStability}%  (avg presence across clusters)`);
   console.log(`  Consensus score:           ${consensusScore}%  (issues in every version)`);
-  console.log(`  Avg text similarity:       ${avgMatchScore}%  (mean text/fp similarity across matched pairs)`);
+  console.log(`  Avg text similarity:       ${avgTextSimilarity}%  (mean similarity across matched pairs)`);
 
   banner("Issue Clusters  (sorted by stability)");
 
@@ -298,12 +570,10 @@ async function main() {
       console.log(`         Missing in:  ${missingVersions.join("  ")}`);
     }
 
-    // Show fingerprint drift if the cluster has variant fingerprints
-    const uniqueFps = new Set(
-      [...cluster.versions.values()].map((e) => e.fingerprint),
-    );
+    // Show fingerprint drift across versions
+    const uniqueFps = new Set([...cluster.versions.values()].map((e) => e.fingerprint));
     if (uniqueFps.size > 1) {
-      console.log(`         Fingerprint variants across versions:`);
+      console.log(`         Fingerprint variants:`);
       for (const [ver, entry] of cluster.versions) {
         if (entry.fingerprint !== cluster.anchor.fingerprint) {
           console.log(`           ${ver}: ${entry.fingerprint}`);
