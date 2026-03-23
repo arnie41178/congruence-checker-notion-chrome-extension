@@ -44,8 +44,10 @@ interface Cluster {
   anchor: FingerprintEntry;
   /** Map of version → the matched entry in that version. */
   versions: Map<string, FingerprintEntry>;
-  /** Average pairwise combined score for all members vs the anchor. */
-  avgScore: number;
+  /** Sum of combinedScore values for all non-anchor matches. */
+  scoreSum: number;
+  /** Number of non-anchor matches (= versions.size - 1 once anchor is seeded). */
+  scoreCount: number;
 }
 
 // ── CLI arg helpers ───────────────────────────────────────────────────────────
@@ -168,9 +170,8 @@ function buildClusters(
       usedClusters.add(clusterIdx);
       const cluster = clusters[clusterIdx];
       cluster.versions.set(version, entries[entryIdx]);
-      // Running average of match scores vs anchor
-      const n = cluster.versions.size;
-      cluster.avgScore = cluster.avgScore + (score - cluster.avgScore) / n;
+      cluster.scoreSum += score;
+      cluster.scoreCount += 1;
     }
 
     // Unmatched entries → new clusters
@@ -179,7 +180,8 @@ function buildClusters(
       clusters.push({
         anchor: entries[ei],
         versions: new Map([[version, entries[ei]]]),
-        avgScore: 1.0, // anchor matches itself perfectly
+        scoreSum: 0,
+        scoreCount: 0,
       });
     }
   }
@@ -259,6 +261,11 @@ async function main() {
   // Consensus score: fraction of clusters present in every version
   const consensusScore = clusters.length === 0 ? 100 : Math.round((fullStable / clusters.length) * 100);
 
+  // Average match score: mean combinedScore across all cross-version matches
+  const globalScoreSum   = clusters.reduce((s, c) => s + c.scoreSum, 0);
+  const globalScoreCount = clusters.reduce((s, c) => s + c.scoreCount, 0);
+  const avgMatchScore = globalScoreCount === 0 ? 100 : Math.round((globalScoreSum / globalScoreCount) * 100);
+
   banner(`Multi-Version Stability Report  (${N} versions)`);
   console.log(`  Versions:     ${versions.join("  →  ")}`);
   console.log(`  Threshold:    ${pct(threshold)}`);
@@ -272,6 +279,7 @@ async function main() {
   console.log(``);
   console.log(`  Overall stability score:   ${overallStability}%  (avg presence across clusters)`);
   console.log(`  Consensus score:           ${consensusScore}%  (issues in every version)`);
+  console.log(`  Average match score:       ${avgMatchScore}%  (mean similarity of matched pairs)`);
 
   banner("Issue Clusters  (sorted by stability)");
 
