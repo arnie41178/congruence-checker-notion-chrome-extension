@@ -12,8 +12,7 @@
   "dependencies": {
     "@alucify/shared-types": "workspace:*",
     "idb": "^8.0.0",
-    "posthog-js": "^1.130.0",
-    "react": "^18.3.0",
+"react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
   "devDependencies": {
