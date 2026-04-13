@@ -18,7 +18,7 @@ export function SettingsDrawer({ currentMode, currentApiKey, notionToken, notion
 
   const handleModeChange = (next: AnalysisMode) => {
     setMode(next);
-    if (next === "remote") setApiKey("");
+    if (next !== "local") setApiKey("");
   };
 
   const saveDisabled = mode === "local" && apiKey.trim().length === 0;
@@ -29,7 +29,7 @@ export function SettingsDrawer({ currentMode, currentApiKey, notionToken, notion
   };
 
   return (
-    <div className="absolute inset-0 bg-white z-10 flex flex-col">
+    <div className="absolute inset-0 bg-white z-10 flex flex-col overflow-hidden">
       {/* Drawer header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-700">Settings</span>
@@ -45,61 +45,96 @@ export function SettingsDrawer({ currentMode, currentApiKey, notionToken, notion
       </div>
 
       {/* Content */}
-      <div className="flex-1 p-4 flex flex-col gap-4">
+      <div className="flex-1 p-4 flex flex-col gap-4 overflow-y-auto">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Analysis Mode</p>
 
-        {/* Mode toggle */}
-        <div className="flex gap-2">
+        {/* Mode options */}
+        <div className="flex flex-col gap-2">
+          {/* Remote */}
           <button
             onClick={() => handleModeChange("remote")}
-            className={`flex-1 text-xs rounded-lg px-3 py-2 border font-medium transition-colors ${
+            className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors ${
               mode === "remote"
-                ? "bg-brand-500 text-white border-brand-500"
-                : "text-gray-600 border-gray-200 hover:bg-gray-50"
+                ? "bg-brand-50 border-brand-500"
+                : "border-gray-200 hover:bg-gray-50"
             }`}
           >
-            Remote
+            <div className="flex items-center gap-2">
+              <span className={`w-3 h-3 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                mode === "remote" ? "border-brand-500" : "border-gray-300"
+              }`}>
+                {mode === "remote" && <span className="w-1.5 h-1.5 rounded-full bg-brand-500" />}
+              </span>
+              <span className="text-xs font-medium text-gray-800">Remote (Alucify)</span>
+            </div>
+            {mode === "remote" && (
+              <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
+                <p className="text-xs text-gray-500 flex items-center gap-1"><span className="text-green-500">✓</span> No API key required</p>
+                <p className="text-xs text-gray-500 flex items-center gap-1"><span className="text-green-500">✓</span> No code saved on our servers</p>
+              </div>
+            )}
           </button>
+
+          {/* Local — API key */}
           <button
             onClick={() => handleModeChange("local")}
-            className={`flex-1 text-xs rounded-lg px-3 py-2 border font-medium transition-colors ${
+            className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors ${
               mode === "local"
-                ? "bg-purple-600 text-white border-purple-600"
-                : "text-gray-600 border-gray-200 hover:bg-gray-50"
+                ? "bg-purple-50 border-purple-500"
+                : "border-gray-200 hover:bg-gray-50"
             }`}
           >
-            Local
+            <div className="flex items-center gap-2">
+              <span className={`w-3 h-3 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                mode === "local" ? "border-purple-500" : "border-gray-300"
+              }`}>
+                {mode === "local" && <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />}
+              </span>
+              <span className="text-xs font-medium text-gray-800">Local (API Key)</span>
+            </div>
+            {mode === "local" && (
+              <div className="mt-2 ml-5 flex flex-col gap-2">
+                <p className="text-xs text-amber-600 flex items-center gap-1"><span>⚠</span> Requires your Anthropic API key</p>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="sk-ant-..."
+                  className="text-xs border border-gray-200 rounded-lg px-3 py-2 w-full focus:outline-none focus:border-purple-400 font-mono bg-white"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+          </button>
+
+          {/* Local — Companion (Claude subscription) */}
+          <button
+            onClick={() => handleModeChange("local-companion")}
+            className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors ${
+              mode === "local-companion"
+                ? "bg-emerald-50 border-emerald-500"
+                : "border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`w-3 h-3 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                mode === "local-companion" ? "border-emerald-500" : "border-gray-300"
+              }`}>
+                {mode === "local-companion" && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+              </span>
+              <span className="text-xs font-medium text-gray-800">Local (Claude Subscription)</span>
+            </div>
+            {mode === "local-companion" && (
+              <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
+                <p className="text-xs text-gray-500 flex items-center gap-1"><span className="text-green-500">✓</span> No API key needed — uses your Claude plan</p>
+                <p className="text-xs text-gray-500 flex items-center gap-1"><span className="text-green-500">✓</span> Runs entirely on your machine</p>
+                <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5"><span>ℹ</span> Requires companion app installed</p>
+              </div>
+            )}
           </button>
         </div>
-
-        {/* Mode description */}
-        {mode === "remote" && (
-          <div className="flex flex-col gap-1.5">
-            <p className="text-xs text-gray-500 flex items-center gap-1.5">
-              <span className="text-green-500">✓</span> No API key required
-            </p>
-            <p className="text-xs text-gray-500 flex items-center gap-1.5">
-              <span className="text-green-500">✓</span> No code is ever saved on our servers
-            </p>
-          </div>
-        )}
-
-        {mode === "local" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-amber-600 flex items-center gap-1.5">
-              <span>⚠</span> Requires your Anthropic API key
-            </p>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-ant-..."
-              className="text-xs border border-gray-200 rounded-lg px-3 py-2 w-full focus:outline-none focus:border-purple-400 font-mono"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-        )}
 
         {/* Notion Connection */}
         <div className="flex flex-col gap-2 pt-2 border-t border-gray-100">

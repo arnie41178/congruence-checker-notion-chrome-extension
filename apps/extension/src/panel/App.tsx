@@ -217,6 +217,11 @@ export default function App() {
             Local
           </span>
         )}
+        {settings.mode === "local-companion" && (
+          <span className="shrink-0 text-xs px-2 py-0.5 rounded-full border text-emerald-600 bg-emerald-50 border-emerald-200">
+            Local (Companion)
+          </span>
+        )}
         {settings.mode === "remote" && (
           <span className="shrink-0 text-xs px-2 py-0.5 rounded-full border text-gray-500 bg-white border-gray-200">
             Remote

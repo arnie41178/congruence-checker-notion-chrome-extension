@@ -1,0 +1,17 @@
+{
+  "name": "@alucify/companion",
+  "version": "1.0.0",
+  "description": "Alucify companion app — routes Claude CLI calls from the Chrome extension via native messaging",
+  "private": false,
+  "bin": {
+    "alucify-companion": "./bin/companion.js"
+  },
+  "scripts": {
+    "install-host": "node ./bin/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["alucify", "chrome-extension", "native-messaging", "claude"],
+  "license": "MIT"
+}

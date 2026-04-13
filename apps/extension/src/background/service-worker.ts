@@ -1,7 +1,82 @@
 import { getOrCreateClientId } from "../lib/client-id";
 import { initTelemetry, track } from "../lib/telemetry";
 import { runLocalPipeline } from "../lib/local-pipeline";
+import type { ClaudeInvoker } from "../lib/local-pipeline";
 import type { RepoContext } from "@alucify/shared-types";
+
+// ── Claude invoker factories ──────────────────────────────────────────────────
+
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const LOCAL_MODEL = "claude-opus-4-6";
+const COMPANION_HOST = "com.alucify.companion";
+
+/** Invoker that calls Anthropic API directly using the user's API key. */
+function makeApiKeyInvoker(apiKey: string): ClaudeInvoker {
+  return async (system, prompt, maxTokens = 2048) => {
+    const MAX_RETRIES = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = await fetch(ANTHROPIC_API, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model: LOCAL_MODEL,
+            max_tokens: maxTokens,
+            system,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => res.statusText);
+          throw new Error(`Anthropic API error ${res.status}: ${body}`);
+        }
+        const data = await res.json() as { content: Array<{ type: string; text: string }> };
+        return data.content[0]?.type === "text" ? data.content[0].text : "";
+      } catch (err: unknown) {
+        lastErr = err;
+        const msg = String(err);
+        const isTransient = msg.includes("529") || msg.includes("503") || msg.includes("502");
+        if (isTransient && attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, attempt * 5000));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr;
+  };
+}
+
+/** Invoker that routes calls through the native messaging companion (claude CLI). */
+function makeCompanionInvoker(): ClaudeInvoker {
+  return (system, prompt) =>
+    new Promise((resolve, reject) => {
+      chrome.runtime.sendNativeMessage(
+        COMPANION_HOST,
+        { system, prompt, model: LOCAL_MODEL },
+        (response: { text?: string; error?: string } | undefined) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(
+              `Companion not available: ${chrome.runtime.lastError.message}. ` +
+              "Run: npx @alucify/companion install"
+            ));
+            return;
+          }
+          if (response?.error) {
+            reject(new Error(response.error));
+            return;
+          }
+          resolve(response?.text ?? "");
+        }
+      );
+    });
+}
 
 // ── Remote config cache ───────────────────────────────────────────────────────
 
@@ -125,19 +200,25 @@ async function handleMessage(message: Record<string, unknown>) {
       }
       console.log(`[Alucify SW] START_ANALYSIS mode=${mode} notionPageId=${notionPageId} freshPrdLength=${prdText.length} cachedPrdLength=${cachedPrdText.length} repoFiles=${repo?.files?.map(f => f.path)}`);
 
-      if (mode === "local") {
-        const apiKey = (stored.alucify_api_key as string) ?? "";
-        if (!apiKey) throw new Error("No API key configured. Open Settings to add your Anthropic API key.");
+      if (mode === "local" || mode === "local-companion") {
+        let invoker: ClaudeInvoker;
+        if (mode === "local-companion") {
+          invoker = makeCompanionInvoker();
+        } else {
+          const apiKey = (stored.alucify_api_key as string) ?? "";
+          if (!apiKey) throw new Error("No API key configured. Open Settings to add your Anthropic API key.");
+          invoker = makeApiKeyInvoker(apiKey);
+        }
         const jobId = crypto.randomUUID();
-        localJobs.set(jobId, { jobId, status: "running", stage: 1, stageLabel: "Extracting PRD intent..." });
-        runLocalPipeline(jobId, notionPageId, prdText, repo ?? { name: "unknown", files: [], meta: { totalFiles: 0, totalChars: 0 } }, apiKey, (progress) => {
+        localJobs.set(jobId, { jobId, status: "running", stage: 1, stageLabel: "Extracting requirements..." });
+        runLocalPipeline(jobId, notionPageId, prdText, repo ?? { name: "unknown", files: [], meta: { totalFiles: 0, totalChars: 0 } }, invoker, (progress) => {
           localJobs.set(jobId, { ...localJobs.get(jobId)!, ...progress });
         }).then((result) => {
           localJobs.set(jobId, { jobId, status: "completed", result });
         }).catch((err) => {
           localJobs.set(jobId, { jobId, status: "failed", message: String(err) });
         });
-        track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode: "local" });
+        track("analysis_started", { notionPageId, jobId, prdLength: prdText.length, mode });
         return { jobId };
       }
 

@@ -9,7 +9,7 @@ export function OnboardingScreen({ onComplete }: Props) {
   const [mode, setMode] = useState<AnalysisMode>("remote");
   const [apiKey, setApiKey] = useState("");
 
-  const canProceed = mode === "remote" || apiKey.trim().length > 0;
+  const canProceed = mode === "remote" || mode === "local-companion" || apiKey.trim().length > 0;
 
   const handleGetStarted = () => {
     onComplete(mode, apiKey.trim());
@@ -50,7 +50,37 @@ export function OnboardingScreen({ onComplete }: Props) {
         </div>
       </button>
 
-      {/* Local option */}
+      {/* Local — Claude subscription via companion */}
+      <button
+        onClick={() => { setMode("local-companion"); setApiKey(""); }}
+        className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
+          mode === "local-companion"
+            ? "border-emerald-500 bg-emerald-50"
+            : "border-gray-200 hover:border-gray-300"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+            mode === "local-companion" ? "border-emerald-500" : "border-gray-300"
+          }`}>
+            {mode === "local-companion" && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+          </span>
+          <span className="text-sm font-medium text-gray-800">Local (Claude Subscription)</span>
+        </div>
+        <div className="ml-5 flex flex-col gap-0.5">
+          <p className="text-xs text-gray-500 flex items-center gap-1">
+            <span className="text-green-500">✓</span> No API key — uses your Claude plan
+          </p>
+          <p className="text-xs text-gray-500 flex items-center gap-1">
+            <span className="text-green-500">✓</span> Runs entirely on your machine
+          </p>
+          <p className="text-xs text-gray-400 flex items-center gap-1">
+            <span>ℹ</span> Requires companion app installed
+          </p>
+        </div>
+      </button>
+
+      {/* Local — API key */}
       <button
         onClick={() => setMode("local")}
         className={`w-full text-left rounded-xl border-2 px-4 py-3 transition-colors ${
@@ -65,7 +95,7 @@ export function OnboardingScreen({ onComplete }: Props) {
           }`}>
             {mode === "local" && <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />}
           </span>
-          <span className="text-sm font-medium text-gray-800">Local (Your Key)</span>
+          <span className="text-sm font-medium text-gray-800">Local (API Key)</span>
         </div>
         <div className="ml-5">
           <p className="text-xs text-amber-600 flex items-center gap-1 mb-2">

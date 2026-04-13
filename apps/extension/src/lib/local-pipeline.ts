@@ -1,15 +1,7 @@
-import type { RepoContext, RepoFile, AnalysisResult, Issue, Scorecard } from "@alucify/shared-types";
-import AUDIT_AGENT_RAW from "../agents/prd-auditor.md?raw";
+import type { RepoContext, RepoFile, AnalysisResult, Issue, Scorecard, Requirement } from "@alucify/shared-types";
+import REQUIREMENT_AUDITOR_RAW from "../agents/requirement-auditor.md?raw";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-interface PrdEntities {
-  entities: string[];
-  apiEndpoints: string[];
-  userFlows: string[];
-  techRequirements: string[];
-  integrations: string[];
-}
 
 interface RepoIndex {
   fileCount: number;
@@ -25,120 +17,115 @@ export interface LocalJobProgress {
   stageLabel: string;
 }
 
+/**
+ * Abstraction over LLM invocation — either direct Anthropic API (API key)
+ * or the Claude CLI via native messaging companion.
+ */
+export type ClaudeInvoker = (system: string, prompt: string, maxTokens?: number) => Promise<string>;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-opus-4-6";
-
 const STAGE_LABELS = [
-  "Extracting PRD intent...",
+  "Extracting requirements...",
   "Scanning repository...",
-  "Auditing PRD against codebase...",
+  "Auditing requirements...",
   "Compiling results...",
 ];
 
-const PRD_EXTRACTION_SYSTEM = `You are a technical analyst specializing in product requirements documents (PRDs).
-Your task is to extract structured technical requirements from a PRD.
+const REQUIREMENT_EXTRACTION_SYSTEM = `You are a senior product analyst specialising in breaking down Product Requirements Documents (PRDs) into coherent, self-contained requirements suitable for implementation review.
 
-Extract and return a JSON object with these fields:
-- entities: string[] — domain model names (User, Order, Cart, Payment, etc.)
-- apiEndpoints: string[] — API routes mentioned (e.g. POST /api/checkout, GET /users/:id)
-- userFlows: string[] — named user journeys or features (e.g. "User Registration", "Checkout Flow")
-- techRequirements: string[] — specific technical requirements (e.g. "real-time updates", "OAuth2 login")
-- integrations: string[] — external services mentioned (e.g. Stripe, SendGrid, Firebase)
+Your task is to read a PRD and extract requirements at a level that aligns with how engineering work is scoped and implemented — typically at a user story or feature slice level.
 
-Return ONLY valid JSON. No markdown, no explanation.`;
+## Core Principle
+
+Each requirement should represent a **self-contained unit of functionality** that an engineer could implement without requiring additional requirements to understand its behavior.
+
+Avoid over-fragmentation into acceptance-criteria-level statements.
+
+---
+
+## Rules
+
+- Each requirement must represent a **cohesive feature, user story, or workflow slice**.
+- A requirement MAY include multiple behaviors if they are tightly related and required to understand the full flow.
+- Do NOT split requirements into overly granular acceptance criteria.
+- Ensure each requirement is **independently understandable and analyzable**.
+
+- Do NOT paraphrase unnecessarily — stay close to the PRD language, but you may consolidate closely related statements into a single coherent requirement.
+
+- Assign a sequential ID starting at R001.
+
+- Classify each requirement:
+  - type:
+    - "functional" → user-facing behavior or system capability
+    - "non-functional" → performance, reliability, security, scalability, etc.
+    - "constraint" → explicit limitations (tech stack, compliance, scope boundaries)
+
+  - priority:
+    - "must-have" → required for core functionality or launch
+    - "should-have" → important but not blocking
+    - "nice-to-have" → optional or future consideration
+
+---
+
+## PRD Excerpts (Critical)
+
+For each requirement, include the **supporting excerpts from the PRD** that justify the requirement.
+
+- Add a field: \`"prd_excerpts"\` as an array of strings.
+- Each excerpt must be a **verbatim quote from the PRD** (no paraphrasing).
+- Include **all relevant portions of the PRD** needed to fully understand the requirement.
+- If a requirement is derived from multiple parts of the PRD, include all such excerpts.
+- Excerpts can include full paragraphs or sections if they contribute meaningfully to the requirement.
+- Do NOT invent or infer excerpts — only include text explicitly present in the PRD.
+
+---
+
+## Output format
+
+Return ONLY a valid JSON object with this exact shape — no markdown, no explanation:
+
+{
+  "requirements": [
+    {
+      "id": "R001",
+      "title": "Short label (max 10 words)",
+      "description": "Self-contained requirement describing a complete feature, flow, or capability.",
+      "type": "functional" | "non-functional" | "constraint",
+      "priority": "must-have" | "should-have" | "nice-to-have",
+      "prd_excerpts": [
+        "Exact quote from PRD supporting this requirement"
+      ]
+    }
+  ]
+}`;
 
 // ── Agent prompt loading ───────────────────────────────────────────────────────
 
 function loadAuditSystemPrompt(): string {
   // Strip YAML frontmatter (--- ... ---) and return the body
-  const match = AUDIT_AGENT_RAW.match(/^---[\s\S]*?---\n([\s\S]*)$/);
-  return match ? match[1].trim() : AUDIT_AGENT_RAW.trim();
+  const match = REQUIREMENT_AUDITOR_RAW.match(/^---[\s\S]*?---\n([\s\S]*)$/);
+  return match ? match[1].trim() : REQUIREMENT_AUDITOR_RAW.trim();
 }
 
-// ── Anthropic API call ────────────────────────────────────────────────────────
 
-async function callAnthropic(
-  apiKey: string,
-  system: string,
-  userContent: string,
-  maxTokens: number
-): Promise<string> {
-  const res = await fetch(ANTHROPIC_API, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: userContent }],
-    }),
-  });
+// ── Stage 1: Requirement extraction ──────────────────────────────────────────
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => res.statusText);
-    throw new Error(`Anthropic API error ${res.status}: ${body}`);
-  }
-
-  const data = await res.json() as { content: Array<{ type: string; text: string }> };
-  return data.content[0]?.type === "text" ? data.content[0].text : "";
-}
-
-async function callAnthropicWithRetry(
-  apiKey: string,
-  system: string,
-  userContent: string,
-  maxTokens: number
-): Promise<string> {
-  const MAX_RETRIES = 3;
-  let lastErr: unknown;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await callAnthropic(apiKey, system, userContent, maxTokens);
-    } catch (err: unknown) {
-      lastErr = err;
-      const msg = String(err);
-      const isTransient = msg.includes("529") || msg.includes("503") || msg.includes("502");
-      if (isTransient) {
-        const delay = attempt * 5000;
-        console.warn(`[local-pipeline] Attempt ${attempt} failed, retrying in ${delay}ms…`);
-        await new Promise((r) => setTimeout(r, delay));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr;
-}
-
-// ── Stage 1: PRD entity extraction ────────────────────────────────────────────
-
-async function extractPrdEntities(apiKey: string, prdText: string): Promise<PrdEntities> {
-  const empty: PrdEntities = {
-    entities: [], apiEndpoints: [], userFlows: [], techRequirements: [], integrations: [],
-  };
-
-  if (prdText.trim().length <= 50) return empty;
+async function extractRequirements(invoker: ClaudeInvoker, prdText: string): Promise<Requirement[]> {
+  if (prdText.trim().length <= 50) return [];
 
   try {
-    const raw = await callAnthropic(
-      apiKey,
-      PRD_EXTRACTION_SYSTEM,
-      `Extract technical requirements from this PRD:\n\n${prdText}`,
-      2048
+    const raw = await invoker(
+      REQUIREMENT_EXTRACTION_SYSTEM,
+      `Extract all requirements from this PRD:\n\n## PRD Text\n${prdText}`,
+      4096
     );
     const cleaned = raw.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
-    return JSON.parse(cleaned) as PrdEntities;
+    const parsed = JSON.parse(cleaned) as { requirements: Requirement[] };
+    return parsed.requirements ?? [];
   } catch (err) {
-    console.warn("[local-pipeline] PRD extraction failed, continuing:", err);
-    return empty;
+    console.warn("[local-pipeline] Requirement extraction failed, continuing:", err);
+    return [];
   }
 }
 
@@ -220,104 +207,110 @@ function extractKeyFileContents(files: RepoFile[]): string {
   return result;
 }
 
-// ── Stage 3: PRD audit ────────────────────────────────────────────────────────
+// ── Stage 3: Per-requirement audit user message builder ───────────────────────
 
-function buildAuditUserMessage(prdText: string, prdEntities: PrdEntities, repoIndex: RepoIndex): string {
-  const entitySummary = [
-    `Entities: ${prdEntities.entities.join(", ") || "none"}`,
-    `API Endpoints: ${prdEntities.apiEndpoints.join(", ") || "none"}`,
-    `User Flows: ${prdEntities.userFlows.join(", ") || "none"}`,
-    `Tech Requirements: ${prdEntities.techRequirements.join(", ") || "none"}`,
-    `Integrations: ${prdEntities.integrations.join(", ") || "none"}`,
-  ].join("\n");
+function buildRequirementUserMessage(
+  req: Requirement,
+  allRequirements: Requirement[],
+  repoIndex: RepoIndex
+): string {
+  const allRequirementsJson = JSON.stringify(
+    {
+      requirements: allRequirements.map(({ id, title, description, type, priority }) => ({
+        id, title, description, type, priority,
+      })),
+    },
+    null,
+    2
+  );
 
-  const repoLines: string[] = [];
-  repoLines.push(`File count: ${repoIndex.fileCount}`);
-  repoLines.push(`\nFile tree:\n${repoIndex.fileTree.slice(0, 3000)}`);
-  if (repoIndex.routes.length > 0) repoLines.push(`\nExisting API routes:\n${repoIndex.routes.join("\n")}`);
-  if (repoIndex.models.length > 0) repoLines.push(`\nModel / schema files:\n${repoIndex.models.join("\n")}`);
-  if (repoIndex.services.length > 0) repoLines.push(`\nService / controller files:\n${repoIndex.services.join("\n")}`);
-  if (repoIndex.keyFileContents) repoLines.push(`\nKey file contents:\n${repoIndex.keyFileContents.slice(0, 6000)}`);
+  const lines: string[] = [];
 
-  return `## PRD Text
-${prdText.slice(0, 30_000)}
+  lines.push(`## Full Requirements Set (for scope awareness only)`);
+  lines.push(``);
+  lines.push(`The complete list of requirements being audited in this PRD is provided below.`);
+  lines.push(`Use this ONLY to:`);
+  lines.push(`1. Identify whether THIS requirement duplicates another in scope or behavior.`);
+  lines.push(`2. Avoid flagging something as "missing" when it is already covered by a separate, dedicated requirement.`);
+  lines.push(``);
+  lines.push(`Audit requirements independently. Do NOT reference what other requirements say in your output — each audit block must stand alone.`);
+  lines.push(``);
+  lines.push("```json");
+  lines.push(allRequirementsJson);
+  lines.push("```");
+  lines.push(``);
 
-## Extracted PRD Entities
-${entitySummary}
+  lines.push(`## Requirement`);
+  lines.push(`ID: ${req.id}`);
+  lines.push(`Title: ${req.title}`);
+  lines.push(`Type: ${req.type} | Priority: ${req.priority}`);
+  lines.push(`Description: ${req.description}`);
+  if (req.prd_excerpts && req.prd_excerpts.length > 0) {
+    lines.push(`\n### PRD Excerpts`);
+    req.prd_excerpts.forEach((excerpt, i) => lines.push(`${i + 1}. "${excerpt}"`));
+  }
+  lines.push(``);
 
-## Repository Index
-${repoLines.join("\n")}
+  lines.push(`## Repository Index`);
+  lines.push(`File count: ${repoIndex.fileCount}`);
+  lines.push(`\nFile tree:\n${repoIndex.fileTree.slice(0, 3000)}`);
+  if (repoIndex.routes.length > 0) lines.push(`\nExisting API routes:\n${repoIndex.routes.join("\n")}`);
+  if (repoIndex.models.length > 0) lines.push(`\nModel / schema files:\n${repoIndex.models.join("\n")}`);
+  if (repoIndex.services.length > 0) lines.push(`\nService / controller files:\n${repoIndex.services.join("\n")}`);
+  if (repoIndex.keyFileContents) lines.push(`\nKey file contents:\n${repoIndex.keyFileContents.slice(0, 6000)}`);
 
-Perform the PRD audit and return the full markdown audit report.`;
+  lines.push(``);
+  lines.push(`Audit ONLY the requirement above and return the structured block as instructed.`);
+
+  return lines.join("\n");
 }
 
-// ── Stage 4: Parse audit report → issues ─────────────────────────────────────
+// ── Stage 4: Parse per-requirement audit block → Issue ────────────────────────
 
-const SEVERITY_MAP: Record<string, Issue["impact"]> = {
-  critical: "critical",
-  major: "high",
-  minor: "low",
+// Status → impact mapping
+const STATUS_IMPACT: Record<string, Issue["impact"]> = {
+  conflicting: "high",
+  "needs-clarification": "medium",
+  congruent: "low",
 };
 
-const CATEGORY_AREA: Record<string, Issue["affectedArea"]> = {
-  terminology: "other",
-  conflict: "other",
-  duplication: "other",
-  missing: "other",
-};
+function parseRequirementAuditBlock(block: string, req: Requirement): Issue | null {
+  const statusMatch = block.match(/\*\*Status\*\*:\s*([^\n]+)/i);
+  const evidenceMatch = block.match(/\*\*Evidence\*\*:\s*([\s\S]*?)(?=\n\*\*[A-Z]|$)/i);
+  const gapMatch = block.match(/\*\*Gap\*\*:\s*([\s\S]*?)(?=\n\*\*[A-Z]|$)/i);
+  const suggestionMatch = block.match(/\*\*Suggestion\*\*:\s*([\s\S]*?)(?=\n\*\*[A-Z]|$)/i);
 
-function extractField(block: string, field: string): string {
-  const re = new RegExp(`\\*\\*${field}\\*\\*:\\s*([\\s\\S]*?)(?=\\n\\*\\*[A-Z]|$)`, "i");
-  return block.match(re)?.[1]?.trim() ?? "";
+  const rawStatus = statusMatch?.[1]?.trim().toLowerCase() ?? "congruent";
+  const impact: Issue["impact"] = STATUS_IMPACT[rawStatus] ?? "low";
+
+  const gap = gapMatch?.[1]?.trim() ?? "";
+  const suggestion = suggestionMatch?.[1]?.trim() ?? "";
+  const evidence = evidenceMatch?.[1]?.trim() ?? "";
+
+  return {
+    id: req.id,
+    summary: req.title,
+    description: gap || `Requirement ${req.id} is ${rawStatus}.`,
+    impact,
+    recommendation: suggestion || "None.",
+    affectedArea: "other",
+    evidence: evidence || undefined,
+  };
 }
 
-function auditReportToIssues(markdownReport: string): Issue[] {
+function parseAllAuditBlocks(auditBlocks: Array<{ raw: string; req: Requirement }>): Issue[] {
   const issues: Issue[] = [];
-  const blocks = markdownReport.split(/^### Issue \d+\s*$/m).slice(1);
-
-  for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
-    const title = extractField(block, "Title");
-    if (!title) continue;
-
-    const rawSeverity = extractField(block, "Severity").toLowerCase();
-    const impact: Issue["impact"] = SEVERITY_MAP[rawSeverity] ?? "medium";
-
-    const category = extractField(block, "Category").toLowerCase();
-    const affectedArea: Issue["affectedArea"] = (CATEGORY_AREA[category] ?? "other") as Issue["affectedArea"];
-
-    issues.push({
-      id: `audit-${i + 1}`,
-      summary: title.slice(0, 200),
-      description: extractField(block, "Description").slice(0, 1000),
-      impact,
-      recommendation: extractField(block, "Resolution").slice(0, 1000),
-      affectedArea,
-      evidence: extractField(block, "Evidence").slice(0, 500) || undefined,
-      risk: extractField(block, "Risk").slice(0, 500) || undefined,
-    });
+  for (const { raw, req } of auditBlocks) {
+    const issue = parseRequirementAuditBlock(raw, req);
+    if (issue) issues.push(issue);
   }
-
-  if (issues.length === 0 && markdownReport.length > 100) {
-    const statusMatch = markdownReport.match(/\*\*Status\*\*:\s*(.+)/);
-    const status = statusMatch?.[1]?.trim() ?? "NEEDS REVIEW";
-    issues.push({
-      id: "audit-1",
-      summary: `PRD Audit: ${status}`,
-      description: markdownReport.slice(0, 1000),
-      impact: status.includes("MAJOR") ? "high" : "medium",
-      recommendation: "Review full audit report for detailed findings.",
-      affectedArea: "other",
-    });
-  }
-
-  return issues.slice(0, 30);
+  return issues;
 }
 
 function deriveBadge(issues: Issue[]): AnalysisResult["badge"] {
   if (issues.some((i) => i.impact === "critical")) return "not-ready";
   if (issues.some((i) => i.impact === "high")) return "needs-work";
-  if (issues.length > 0) return "mostly-ready";
+  if (issues.some((i) => i.impact === "medium")) return "mostly-ready";
   return "ready";
 }
 
@@ -338,32 +331,46 @@ export async function runLocalPipeline(
   notionPageId: string,
   prdText: string,
   repo: RepoContext,
-  apiKey: string,
+  invoker: ClaudeInvoker,
   onProgress: (update: LocalJobProgress) => void
 ): Promise<AnalysisResult> {
-  // Stage 1
-  onProgress({ stage: 1, stageLabel: STAGE_LABELS[0] });
-  const prdEntities = await extractPrdEntities(apiKey, prdText);
+  const systemPrompt = loadAuditSystemPrompt();
 
-  // Stage 2
+  // Stage 1: Extract structured requirements
+  onProgress({ stage: 1, stageLabel: STAGE_LABELS[0] });
+  const requirements = await extractRequirements(invoker, prdText);
+
+  // Stage 2: Build repo index
   onProgress({ stage: 2, stageLabel: STAGE_LABELS[1] });
   const repoIndex = buildRepoIndex(repo);
 
-  // Stage 3
+  // Stage 3: One isolated call per requirement
   onProgress({ stage: 3, stageLabel: STAGE_LABELS[2] });
-  const systemPrompt = loadAuditSystemPrompt();
-  const auditReport = await callAnthropicWithRetry(
-    apiKey,
-    systemPrompt,
-    buildAuditUserMessage(prdText, prdEntities, repoIndex),
-    4096
-  );
+  const auditBlocks: Array<{ raw: string; req: Requirement }> = [];
 
-  // Stage 4
+  if (requirements.length === 0) {
+    console.warn("[local-pipeline] No requirements extracted from PRD.");
+  } else {
+    for (let i = 0; i < requirements.length; i++) {
+      const req = requirements[i];
+      onProgress({
+        stage: 3,
+        stageLabel: `Auditing ${req.id} (${i + 1} of ${requirements.length})...`,
+      });
+      const userMessage = buildRequirementUserMessage(req, requirements, repoIndex);
+      const raw = await invoker(systemPrompt, userMessage, 2048);
+      auditBlocks.push({ raw, req });
+    }
+  }
+
+  // Stage 4: Parse all audit blocks into issues
   onProgress({ stage: 4, stageLabel: STAGE_LABELS[3] });
-  const issues = auditReportToIssues(auditReport);
+  const issues = parseAllAuditBlocks(auditBlocks);
   const badge = deriveBadge(issues);
-  const scorecard = scorecardFromReport(auditReport);
+
+  // Try to extract a scorecard from the combined audit output (best-effort)
+  const combinedOutput = auditBlocks.map((b) => b.raw).join("\n\n");
+  const scorecard = scorecardFromReport(combinedOutput);
 
   return {
     jobId,

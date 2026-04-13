@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-export type AnalysisMode = "remote" | "local";
+export type AnalysisMode = "remote" | "local" | "local-companion";
 
 export interface SettingsState {
   mode: AnalysisMode | undefined; // undefined = never saved (first-run)
@@ -36,6 +36,10 @@ export function useSettings() {
       await chrome.storage.local.remove("alucify_api_key");
       await chrome.storage.local.set({ alucify_mode: "remote" });
       setState((s) => ({ ...s, mode: "remote", apiKey: "" }));
+    } else if (mode === "local-companion") {
+      await chrome.storage.local.remove("alucify_api_key");
+      await chrome.storage.local.set({ alucify_mode: "local-companion" });
+      setState((s) => ({ ...s, mode: "local-companion", apiKey: "" }));
     } else {
       await chrome.storage.local.set({ alucify_mode: "local", alucify_api_key: apiKey });
       setState((s) => ({ ...s, mode: "local", apiKey }));
